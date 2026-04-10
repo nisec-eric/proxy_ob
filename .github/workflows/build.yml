@@ -1,10 +1,11 @@
 name: Build
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
+  push:
+    tags:
+      - "v*"
 
 jobs:
   build:
@@ -38,10 +39,43 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
-          go build -ldflags="-s -w" -o proxy_ob${{ matrix.ext }} .
+          go build -ldflags="-s -w" -o proxy_ob-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }} .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: proxy_ob-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: proxy_ob${{ matrix.ext }}
+          path: proxy_ob-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
+
+  release:
+    name: Create Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Rename binaries
+        run: |
+          ls -la artifacts/
+          mv artifacts/proxy_ob-linux-amd64 proxy_ob-linux-amd64
+          mv artifacts/proxy_ob-windows-amd64.exe proxy_ob-windows-amd64.exe
+          mv artifacts/proxy_ob-darwin-arm64 proxy_ob-darwin-arm64
+          mv artifacts/proxy_ob-darwin-amd64 proxy_ob-darwin-amd64
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            proxy_ob-linux-amd64
+            proxy_ob-windows-amd64.exe
+            proxy_ob-darwin-arm64
+            proxy_ob-darwin-amd64
