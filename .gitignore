@@ -1,0 +1,25 @@
+# Binaries
+proxy_ob
+proxy_ob_linux
+proxy_ob.exe
+proxy_ob_mac
+*.exe
+
+# Go
+go.work
+go.work.sum
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Sisyphus internal
+.sisyphus/
+
+# Test artifacts
+/tmp/

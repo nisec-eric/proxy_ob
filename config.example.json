@@ -1,0 +1,5 @@
+{
+  "listen": ":1080",
+  "server": "your-server-ip:8388",
+  "key": "your-secret-key"
+}
