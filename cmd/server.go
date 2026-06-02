@@ -16,6 +16,9 @@ import (
 func RunServer() {
 	cfg, err := internal.Parse(os.Args[1:])
 	if err != nil {
+		if err == internal.ErrHelp {
+			os.Exit(0)
+		}
 		log.Fatalf("parse config: %v", err)
 	}
 

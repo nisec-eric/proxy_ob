@@ -4,10 +4,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 )
+
+var ErrHelp = errors.New("help requested")
 
 // Config holds the application configuration.
 type Config struct {
@@ -58,6 +61,9 @@ func Parse(args []string) (*Config, error) {
 	target := fs.String("t", "", "target address host:port (forward only)")
 
 	if err := fs.Parse(args[1:]); err != nil {
+		if err == flag.ErrHelp {
+			return nil, ErrHelp
+		}
 		return nil, fmt.Errorf("parsing flags: %w", err)
 	}
 

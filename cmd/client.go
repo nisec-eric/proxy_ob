@@ -18,6 +18,9 @@ import (
 func RunClient() {
 	cfg, err := internal.Parse(os.Args[1:])
 	if err != nil {
+		if err == internal.ErrHelp {
+			os.Exit(0)
+		}
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
