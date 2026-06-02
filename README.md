@@ -1,11 +1,12 @@
 # proxy_ob
 
-轻量级加密隧道代理。用 Go 语言编写，通过 ChaCha20-Poly1305 加密将本地 SOCKS5 请求安全转发到远端服务器。
+轻量级加密隧道代理。用 Go 语言编写，通过 ChaCha20-Poly1305 加密将本地 SOCKS5 请求安全转发到远端服务器，并支持本地端口转发到远程内网地址。
 
 ## 功能特性
 
-- 单可执行文件，支持 client / server 双模式运行
+- 单可执行文件，支持 client / server / forward 三种模式运行
 - SOCKS5 TCP CONNECT 代理协议（RFC 1928）
+- 本地端口转发（类似 SSH `-L`，映射本地端口到远程内网地址）
 - ChaCha20-Poly1305 AEAD 加密隧道
 - 预共享密钥认证（支持密码短语和 hex 密钥两种输入方式）
 - 跨平台：Linux / Windows / macOS
@@ -33,10 +34,29 @@
 └───────┼──────────────────┘               └───────┼──────────────────┘
         │                                          │
         └─────────── TCP 连接 ─────────────────────┘
-                                           ──────► 目标服务器 (如 httpbin.org)
+                                            ──────► 目标服务器 (如 httpbin.org)
 ```
 
-数据流：
+端口转发模式：
+
+```
+本地机器 (Forward)                           远端服务器 (Server)
+┌──────────────────────────┐    加密隧道     ┌──────────────────────────┐
+│  本地应用 (如 MySQL 客户端) │               │                          │
+│       │                  │               │                          │
+│       ▼                  │               │  隧道监听 (:8388)         │
+│  TCP 监听 (:3306)         │               │       │                  │
+│       │                  │   ChaCha20    │       ▼                  │
+│       ▼                  │ ◄═══════════► │  握手验证 + 解密          │
+│  直接加密 + 帧封装         │  Poly1305加密  │       │                  │
+│       │                  │  (预配置目标)   │       ▼                  │
+└───────┼──────────────────┘               └───────┼──────────────────┘
+        │                                          │
+        └─────────── 加密隧道 ──────────────────────┘
+                                           ──────► 内网目标 (如 10.0.0.5:3306)
+```
+
+数据流（SOCKS5 模式）：
 
 1. 应用程序发送 SOCKS5 请求到本地 1080 端口
 2. Client 解析 SOCKS5 CONNECT 请求，提取目标地址
@@ -45,6 +65,15 @@
 5. Client 将目标地址加密后发送给 Server
 6. Server 解密目标地址，建立到目标的 TCP 连接
 7. 双向数据通过 ChaCha20-Poly1305 加密隧道中继
+
+数据流（端口转发模式）：
+
+1. 本地应用连接到本地监听端口（如 :3306）
+2. Forward 建立到远端 Server 的加密隧道连接
+3. 双方通过 HMAC-SHA256 密钥令牌进行握手认证
+4. Forward 将预配置的目标地址加密后发送给 Server
+5. Server 解密目标地址，建立到内网目标的 TCP 连接
+6. 双向数据通过加密隧道中继
 
 ## 快速开始
 
@@ -65,7 +94,7 @@ curl --socks5 127.0.0.1:1080 http://httpbin.org/ip
 ## 命令行用法
 
 ```
-proxy_ob <client|server|version> [flags]
+proxy_ob <client|server|forward|version> [flags]
 ```
 
 ### client 子命令
@@ -109,7 +138,33 @@ proxy_ob <client|server|version> [flags]
 
 ```bash
 ./proxy_ob version
-# proxy_ob v0.1.0
+# proxy_ob v0.2.0
+```
+
+### forward 子命令
+
+将本地 TCP 端口通过加密隧道映射到远程内网地址（类似 SSH `-L` 本地端口转发）。无需 SOCKS5 协议，目标地址在启动时预配置。
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `-l` | 本地监听地址（必填） | 无 |
+| `-t` | 远程目标地址 host:port（必填） | 无 |
+| `-s` | 远端隧道服务器地址（必填） | 无 |
+| `-k` | 加密密钥（必填） | 无 |
+| `-c` | JSON 配置文件路径 | 无 |
+
+示例：
+
+```bash
+# 将本地 :3306 转发到远程内网 MySQL
+./proxy_ob forward -l :3306 -t 10.0.0.5:3306 -s "server-ip:8388" -k "my-secret"
+
+# 将本地 :8080 转发到远程内网 Web 服务
+./proxy_ob forward -l :8080 -t internal-api.corp:80 -s "server-ip:8388" -k "my-secret"
+
+# 同时运行多个转发实例
+./proxy_ob forward -l :3306 -t 10.0.0.5:3306 -s "server-ip:8388" -k "key" &
+./proxy_ob forward -l :6379 -t 10.0.0.5:6379 -s "server-ip:8388" -k "key" &
 ```
 
 ## 配置文件
@@ -124,13 +179,25 @@ proxy_ob <client|server|version> [flags]
 }
 ```
 
+端口转发配置示例：
+
+```json
+{
+  "listen": ":3306",
+  "target": "10.0.0.5:3306",
+  "server": "your-server-ip:8388",
+  "key": "your-secret-key"
+}
+```
+
 字段说明：
 
-| 字段 | 说明 | client 默认值 | server 默认值 |
-|------|------|---------------|---------------|
-| `listen` | 监听地址 | `:1080` | `:8388` |
-| `server` | 远端服务器地址（仅 client 模式需要） | 无 | 不适用 |
-| `key` | 加密密钥 | 无 | 无 |
+| 字段 | 说明 | client | server | forward |
+|------|------|--------|--------|---------|
+| `listen` | 监听地址 | `:1080` | `:8388` | 必填 |
+| `server` | 远端服务器地址 | 必填 | 不适用 | 必填 |
+| `key` | 加密密钥 | 必填 | 必填 | 必填 |
+| `target` | 转发目标地址 host:port | 不适用 | 不适用 | 必填 |
 
 配置优先级：**命令行参数 > JSON 配置文件 > 默认值**
 
@@ -194,6 +261,7 @@ proxy_ob/
 ├── config.example.json  # 配置文件示例
 ├── cmd/
 │   ├── client.go        # 客户端模式 — SOCKS5 监听 + 隧道转发
+│   ├── forward.go       # 转发模式 — 本地端口转发到远程内网
 │   └── server.go        # 服务端模式 — 隧道监听 + 目标连接
 └── internal/
     ├── config.go        # 配置解析（CLI 参数 + JSON 文件 + 密钥派生）
@@ -235,6 +303,8 @@ Server 验证版本号和令牌，使用常量时间比较（`subtle.ConstantTim
 ### 并发模型
 
 每个客户端连接分配独立 goroutine 处理。双向数据中继使用两个 goroutine：一个负责 SOCKS5 侧到隧道的加密写入，另一个负责隧道到 SOCKS5 侧的解密读取。任一方向结束即关闭整个连接。
+
+端口转发模式使用相同的并发模型：本地 TCP 连接替代 SOCKS5 连接，其余逻辑一致。
 
 ## 使用场景
 
@@ -282,6 +352,21 @@ curl --socks5 127.0.0.1:1080 http://internal-api.example.com/data
 curl --socks5 127.0.0.1:1080 http://10.0.0.5:8080/status
 ```
 
+### 场景四：端口转发访问内网数据库
+
+将本地端口直接映射到远程内网服务的端口，无需 SOCKS5 客户端支持。适合数据库客户端、SSH 等不支持 SOCKS5 的应用。
+
+```bash
+# 跳板机（有内网访问权限）
+./proxy_ob server -l :8388 -k "forward-key"
+
+# 本地：映射本地 3306 到内网 MySQL
+./proxy_ob forward -l :3306 -t 10.0.0.5:3306 -s jump-host:8388 -k "forward-key"
+
+# 本地直接连接 MySQL
+mysql -h 127.0.0.1 -P 3306 -u root -p
+```
+
 ## 常见问题
 
 **支持哪些平台？**
@@ -290,7 +375,15 @@ Linux amd64、Windows amd64、macOS arm64/amd64。Go 语言的交叉编译也支
 
 **支持 UDP 吗？**
 
-不支持。当前仅实现 SOCKS5 TCP CONNECT 代理。
+不支持。当前仅实现 SOCKS5 TCP CONNECT 代理和 TCP 端口转发。
+
+**forward 和 client 有什么区别？**
+
+`client` 模式启动 SOCKS5 代理，每次连接的目标地址由 SOCKS5 客户端动态指定。`forward` 模式启动纯 TCP 端口转发，目标地址在启动时固定配置。forward 模式不需要客户端支持 SOCKS5 协议。
+
+**可以同时运行多个 forward 实例吗？**
+
+可以。每个 forward 实例监听不同的本地端口、映射到不同的远程目标。只需确保本地端口不冲突即可。
 
 **如何生成安全的密钥？**
 
