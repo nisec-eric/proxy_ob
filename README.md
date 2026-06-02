@@ -12,6 +12,8 @@
 - 跨平台：Linux / Windows / macOS
 - 命令行参数 + 可选 JSON 配置文件
 - 优雅关闭（Ctrl+C）
+- Verbose 调试模式（`-v` 记录请求域名/IP 等连接详情）
+- 后台 Daemon 模式（`-d` 跨平台，Linux/macOS `setsid`，Windows `CREATE_NEW_PROCESS_GROUP`）
 - 零外部依赖（仅 `golang.org/x/crypto`）
 - 编译后体积小：macOS 4.6MB, Linux 2.9MB, Windows 3.0MB
 
@@ -106,6 +108,8 @@ proxy_ob <client|server|forward|version> [flags]
 | `-l` | 本地 SOCKS5 监听地址 | `:1080` |
 | `-s` | 远端隧道服务器地址（必填） | 无 |
 | `-k` | 加密密钥（必填） | 无 |
+| `-v` | 详细调试日志（记录目标域名/IP） | 关闭 |
+| `-d` | 后台 Daemon 模式 | 关闭 |
 | `-c` | JSON 配置文件路径 | 无 |
 
 示例：
@@ -123,6 +127,8 @@ proxy_ob <client|server|forward|version> [flags]
 |------|------|--------|
 | `-l` | 隧道监听地址 | `:8388` |
 | `-k` | 加密密钥（必填） | 无 |
+| `-v` | 详细调试日志 | 关闭 |
+| `-d` | 后台 Daemon 模式 | 关闭 |
 | `-c` | JSON 配置文件路径 | 无 |
 
 示例：
@@ -138,7 +144,7 @@ proxy_ob <client|server|forward|version> [flags]
 
 ```bash
 ./proxy_ob version
-# proxy_ob v0.2.0
+# proxy_ob v0.3.0
 ```
 
 ### forward 子命令
@@ -151,6 +157,8 @@ proxy_ob <client|server|forward|version> [flags]
 | `-t` | 远程目标地址 host:port（必填） | 无 |
 | `-s` | 远端隧道服务器地址（必填） | 无 |
 | `-k` | 加密密钥（必填） | 无 |
+| `-v` | 详细调试日志 | 关闭 |
+| `-d` | 后台 Daemon 模式 | 关闭 |
 | `-c` | JSON 配置文件路径 | 无 |
 
 示例：
@@ -198,6 +206,8 @@ proxy_ob <client|server|forward|version> [flags]
 | `server` | 远端服务器地址 | 必填 | 不适用 | 必填 |
 | `key` | 加密密钥 | 必填 | 必填 | 必填 |
 | `target` | 转发目标地址 host:port | 不适用 | 不适用 | 必填 |
+| `verbose` | 详细调试日志 | `false` | `false` | `false` |
+| `daemon` | 后台 Daemon 模式 | `false` | `false` | `false` |
 
 配置优先级：**命令行参数 > JSON 配置文件 > 默认值**
 
@@ -250,6 +260,18 @@ GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o proxy_ob.exe .
 
 # 交叉编译 macOS arm64
 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o proxy_ob_mac .
+
+# 使用 Makefile 一次构建全部平台
+make dist
+```
+
+或使用 Makefile：
+
+```
+make          # 编译当前平台
+make dist     # 构建全部 4 平台到 dist/
+make vet      # 静态检查
+make clean    # 清理产物
 ```
 
 ## 项目结构
@@ -257,12 +279,17 @@ GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o proxy_ob_mac .
 ```
 proxy_ob/
 ├── main.go              # 程序入口，子命令路由
+├── Makefile             # 多平台构建脚本
 ├── go.mod               # Go 模块定义
 ├── config.example.json  # 配置文件示例
 ├── cmd/
 │   ├── client.go        # 客户端模式 — SOCKS5 监听 + 隧道转发
 │   ├── forward.go       # 转发模式 — 本地端口转发到远程内网
-│   └── server.go        # 服务端模式 — 隧道监听 + 目标连接
+│   ├── server.go        # 服务端模式 — 隧道监听 + 目标连接
+│   ├── daemon.go        # Daemon 模式共享逻辑（re-exec 后台）
+│   ├── daemon_unix.go   # Unix: setsid 脱离终端
+│   ├── daemon_windows.go# Windows: CREATE_NEW_PROCESS_GROUP 脱离控制台
+│   └── log.go           # 日志 helper（infof + verbosef）
 └── internal/
     ├── config.go        # 配置解析（CLI 参数 + JSON 文件 + 密钥派生）
     ├── crypto.go        # ChaCha20-Poly1305 加密/解密 + HMAC 握手令牌
@@ -399,13 +426,37 @@ AEAD 模式同时提供加密和完整性校验。ChaCha20 在没有 AES 硬件�
 
 **如何在后台运行？**
 
-Linux 推荐使用 systemd 或 `nohup`：
+使用内置 `-d` 参数（跨平台支持）：
+
+```bash
+# 后台运行，日志输出到 proxy_ob.log
+./proxy_ob server -d -k "my-key"
+
+# 后台 + 详细日志
+./proxy_ob server -d -v -k "my-key"
+
+# 查看日志
+tail -f proxy_ob.log
+
+# 停止
+kill $(pgrep -f "proxy_ob server")
+```
+
+或使用传统方式：
 
 ```bash
 nohup ./proxy_ob server -l :8388 -k "my-key" > proxy.log 2>&1 &
 ```
 
-Windows 可以使用 `sc.exe` 注册为系统服务，或使用 NSSM 等工具。
+**`-v` verbose 模式会记录什么？**
+
+每条连接的源地址和目标地址（域名或 IP）：
+
+```
+client:  socks5 127.0.0.1:54321 -> httpbin.org:80
+server:  tunnel 1.2.3.4:54321 -> target 10.0.0.5:3306
+forward: forward 127.0.0.1:54321 -> 10.0.0.5:3306
+```
 
 **连接不上，怎么排查？**
 
