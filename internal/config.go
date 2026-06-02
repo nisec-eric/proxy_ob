@@ -11,10 +11,11 @@ import (
 
 // Config holds the application configuration.
 type Config struct {
-	Mode       string `json:"mode"`        // "client" or "server"
+	Mode       string `json:"mode"`        // "client", "server", or "forward"
 	Listen     string `json:"listen"`      // listen address
-	Server     string `json:"server"`      // remote server address (client only)
+	Server     string `json:"server"`      // remote server address (client/forward only)
 	Key        string `json:"key"`         // encryption key (hex or passphrase)
+	Target     string `json:"target"`      // forward target address host:port (forward only)
 	ConfigFile string `json:"config_file"` // optional JSON config file path
 }
 
@@ -24,6 +25,7 @@ type jsonConfig struct {
 	Listen string `json:"listen"`
 	Server string `json:"server"`
 	Key    string `json:"key"`
+	Target string `json:"target"`
 }
 
 // Parse parses CLI flags and optional JSON config file.
@@ -34,8 +36,8 @@ func Parse(args []string) (*Config, error) {
 	}
 
 	mode := args[0]
-	if mode != "client" && mode != "server" {
-		return nil, fmt.Errorf("unknown mode %q: must be \"client\" or \"server\"", mode)
+	if mode != "client" && mode != "server" && mode != "forward" {
+		return nil, fmt.Errorf("unknown mode %q: must be \"client\", \"server\", or \"forward\"", mode)
 	}
 
 	cfg := &Config{Mode: mode}
@@ -50,9 +52,10 @@ func Parse(args []string) (*Config, error) {
 
 	fs := flag.NewFlagSet(mode, flag.ContinueOnError)
 	listen := fs.String("l", "", "listen address")
-	server := fs.String("s", "", "remote server address (client only)")
+	server := fs.String("s", "", "remote server address (client/forward only)")
 	key := fs.String("k", "", "encryption key (hex or passphrase)")
 	configFile := fs.String("c", "", "optional JSON config file path")
+	target := fs.String("t", "", "target address host:port (forward only)")
 
 	if err := fs.Parse(args[1:]); err != nil {
 		return nil, fmt.Errorf("parsing flags: %w", err)
@@ -78,6 +81,9 @@ func Parse(args []string) (*Config, error) {
 		if jc.Key != "" {
 			cfg.Key = jc.Key
 		}
+		if jc.Target != "" {
+			cfg.Target = jc.Target
+		}
 		cfg.ConfigFile = *configFile
 	}
 
@@ -93,6 +99,9 @@ func Parse(args []string) (*Config, error) {
 	if *key != "" {
 		cfg.Key = *key
 	}
+	if *target != "" {
+		cfg.Target = *target
+	}
 
 	// Validate required fields.
 	if cfg.Key == "" {
@@ -100,6 +109,14 @@ func Parse(args []string) (*Config, error) {
 	}
 	if mode == "client" && cfg.Server == "" {
 		return nil, fmt.Errorf("server address is required in client mode: use -s flag or config file")
+	}
+	if mode == "forward" {
+		if cfg.Server == "" {
+			return nil, fmt.Errorf("server address is required in forward mode: use -s flag or config file")
+		}
+		if cfg.Target == "" {
+			return nil, fmt.Errorf("target address is required in forward mode: use -t flag or config file")
+		}
 	}
 
 	return cfg, nil
