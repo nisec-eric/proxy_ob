@@ -7,7 +7,7 @@ import (
 	"proxy_ob/cmd"
 )
 
-const version = "v0.1.0"
+const version = "v0.2.0"
 
 func main() {
 	if len(os.Args) < 2 {
