@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"os/signal"
@@ -12,33 +11,34 @@ import (
 	"proxy_ob/internal"
 )
 
-// RunServer starts the encrypted tunnel server.
 func RunServer() {
-	cfg, err := internal.Parse(os.Args[1:])
+	cfg, err := parseConfig()
 	if err != nil {
 		if err == internal.ErrHelp {
 			os.Exit(0)
 		}
-		log.Fatalf("parse config: %v", err)
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
 	}
 
 	key := internal.DeriveKey(cfg.Key)
 
 	listener, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
-		log.Fatalf("listen: %v", err)
+		fmt.Fprintf(os.Stderr, "listen error: %v\n", err)
+		os.Exit(1)
 	}
-	fmt.Fprintf(os.Stderr, "listening on %s\n", cfg.Listen)
+
+	infof("listening on %s (tunnel)", cfg.Listen)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Graceful shutdown on interrupt.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt)
 	go func() {
 		<-sigCh
-		fmt.Fprintf(os.Stderr, "shutting down\n")
+		infof("shutting down")
 		cancel()
 		listener.Close()
 	}()
@@ -46,16 +46,14 @@ func RunServer() {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			// Listener closed (shutdown).
 			select {
 			case <-ctx.Done():
 				return
 			default:
-				log.Printf("accept: %v", err)
+				infof("accept error: %v", err)
 				continue
 			}
 		}
-		fmt.Fprintf(os.Stderr, "connection from %s\n", conn.RemoteAddr())
 		go handleServerConnection(conn, key)
 	}
 }
@@ -63,52 +61,46 @@ func RunServer() {
 func handleServerConnection(tunnelConn net.Conn, key [32]byte) {
 	defer tunnelConn.Close()
 
-	// Server-side tunnel handshake.
 	if err := internal.ServerHandshake(tunnelConn, key); err != nil {
-		log.Printf("handshake failed from %s: %v", tunnelConn.RemoteAddr(), err)
+		verbosef("handshake failed from %s: %v", tunnelConn.RemoteAddr(), err)
 		return
 	}
 
-	// Read target address frame.
 	frame, err := internal.ReadFrame(tunnelConn, key)
 	if err != nil {
-		log.Printf("read target frame: %v", err)
+		verbosef("read target frame: %v", err)
 		return
 	}
 
-	// Construct target address string.
 	var targetAddrPort string
 	switch frame.Atyp {
-	case 0x01: // IPv4
+	case 0x01:
 		targetAddrPort = fmt.Sprintf("%s:%d", net.IP(frame.Addr).String(), frame.Port)
-	case 0x03: // Domain
+	case 0x03:
 		targetAddrPort = fmt.Sprintf("%s:%d", string(frame.Addr), frame.Port)
-	case 0x04: // IPv6
+	case 0x04:
 		targetAddrPort = fmt.Sprintf("[%s]:%d", net.IP(frame.Addr).String(), frame.Port)
 	default:
-		log.Printf("unsupported atyp: 0x%02x", frame.Atyp)
+		verbosef("unsupported atyp: 0x%02x", frame.Atyp)
 		return
 	}
 
-	// Dial target.
+	verbosef("tunnel %s -> target %s", tunnelConn.RemoteAddr(), targetAddrPort)
+
 	targetConn, err := net.Dial("tcp", targetAddrPort)
 	if err != nil {
-		log.Printf("dial target %s: %v", targetAddrPort, err)
+		verbosef("dial target %s: %v", targetAddrPort, err)
 		return
 	}
 	defer targetConn.Close()
 
-	fmt.Fprintf(os.Stderr, "connected to target %s\n", targetAddrPort)
-
-	// Write initial payload if present.
 	if len(frame.Data) > 0 {
 		if _, err := targetConn.Write(frame.Data); err != nil {
-			log.Printf("write initial payload: %v", err)
+			verbosef("write initial payload: %v", err)
 			return
 		}
 	}
 
-	// Bidirectional relay.
 	var wg sync.WaitGroup
 	wg.Add(2)
 
@@ -121,7 +113,6 @@ func handleServerConnection(tunnelConn net.Conn, key [32]byte) {
 		})
 	}
 
-	// goroutine 1: tunnel → target.
 	go func() {
 		defer wg.Done()
 		for {
@@ -138,7 +129,6 @@ func handleServerConnection(tunnelConn net.Conn, key [32]byte) {
 		closeAll()
 	}()
 
-	// goroutine 2: target → tunnel.
 	go func() {
 		defer wg.Done()
 		buf := make([]byte, 32*1024)
@@ -161,7 +151,6 @@ func handleServerConnection(tunnelConn net.Conn, key [32]byte) {
 		closeAll()
 	}()
 
-	// Wait for both goroutines, ensuring clean shutdown.
 	go func() {
 		wg.Wait()
 		close(done)

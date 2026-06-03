@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"os/signal"
@@ -13,7 +12,7 @@ import (
 )
 
 func RunForward() {
-	cfg, err := internal.Parse(os.Args[1:])
+	cfg, err := parseConfig()
 	if err != nil {
 		if err == internal.ErrHelp {
 			os.Exit(0)
@@ -36,7 +35,7 @@ func RunForward() {
 		os.Exit(1)
 	}
 
-	log.Printf("forwarding %s -> %s via %s", cfg.Listen, cfg.Target, cfg.Server)
+	infof("forwarding %s -> %s via %s", cfg.Listen, cfg.Target, cfg.Server)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -45,6 +44,7 @@ func RunForward() {
 	signal.Notify(sigCh, os.Interrupt)
 	go func() {
 		<-sigCh
+		infof("shutting down")
 		listener.Close()
 		cancel()
 	}()
@@ -56,11 +56,11 @@ func RunForward() {
 			case <-ctx.Done():
 				return
 			default:
-				log.Printf("accept error: %v", err)
+				infof("accept error: %v", err)
 				continue
 			}
 		}
-		log.Printf("connection from %s", conn.RemoteAddr())
+		verbosef("forward %s -> %s", conn.RemoteAddr(), cfg.Target)
 		go handleForwardConnection(conn, cfg, key, atyp, addrBytes, port)
 	}
 }
@@ -97,12 +97,12 @@ func handleForwardConnection(localConn net.Conn, cfg *internal.Config, key [32]b
 
 	tunnelConn, err := net.Dial("tcp", cfg.Server)
 	if err != nil {
-		log.Printf("dial tunnel %s: %v", cfg.Server, err)
+		verbosef("dial tunnel %s: %v", cfg.Server, err)
 		return
 	}
 
 	if err := internal.ClientHandshake(tunnelConn, key); err != nil {
-		log.Printf("handshake failed: %v", err)
+		verbosef("handshake failed: %v", err)
 		tunnelConn.Close()
 		return
 	}
@@ -114,7 +114,7 @@ func handleForwardConnection(localConn net.Conn, cfg *internal.Config, key [32]b
 		Data: nil,
 	}
 	if err := internal.WriteFrame(tunnelConn, key, addrFrame); err != nil {
-		log.Printf("send target frame: %v", err)
+		verbosef("send target frame: %v", err)
 		tunnelConn.Close()
 		return
 	}
