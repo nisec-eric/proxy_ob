@@ -19,16 +19,20 @@ type Config struct {
 	Server     string `json:"server"`      // remote server address (client/forward only)
 	Key        string `json:"key"`         // encryption key (hex or passphrase)
 	Target     string `json:"target"`      // forward target address host:port (forward only)
+	Verbose    bool   `json:"verbose"`     // enable verbose debug logging
+	Daemon     bool   `json:"daemon"`      // run as background daemon
 	ConfigFile string `json:"config_file"` // optional JSON config file path
 }
 
 // jsonConfig mirrors Config for JSON unmarshalling.
 type jsonConfig struct {
-	Mode   string `json:"mode"`
-	Listen string `json:"listen"`
-	Server string `json:"server"`
-	Key    string `json:"key"`
-	Target string `json:"target"`
+	Mode    string `json:"mode"`
+	Listen  string `json:"listen"`
+	Server  string `json:"server"`
+	Key     string `json:"key"`
+	Target  string `json:"target"`
+	Verbose bool   `json:"verbose"`
+	Daemon  bool   `json:"daemon"`
 }
 
 // Parse parses CLI flags and optional JSON config file.
@@ -59,6 +63,8 @@ func Parse(args []string) (*Config, error) {
 	key := fs.String("k", "", "encryption key (hex or passphrase)")
 	configFile := fs.String("c", "", "optional JSON config file path")
 	target := fs.String("t", "", "target address host:port (forward only)")
+	verbose := fs.Bool("v", false, "verbose debug logging")
+	daemon := fs.Bool("d", false, "run as background daemon")
 
 	if err := fs.Parse(args[1:]); err != nil {
 		if err == flag.ErrHelp {
@@ -90,6 +96,8 @@ func Parse(args []string) (*Config, error) {
 		if jc.Target != "" {
 			cfg.Target = jc.Target
 		}
+		cfg.Verbose = jc.Verbose
+		cfg.Daemon = jc.Daemon
 		cfg.ConfigFile = *configFile
 	}
 
@@ -107,6 +115,12 @@ func Parse(args []string) (*Config, error) {
 	}
 	if *target != "" {
 		cfg.Target = *target
+	}
+	if *verbose {
+		cfg.Verbose = true
+	}
+	if *daemon {
+		cfg.Daemon = true
 	}
 
 	// Validate required fields.
