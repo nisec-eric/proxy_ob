@@ -1,13 +1,14 @@
 # proxy_ob
 
-轻量级加密隧道代理。用 Go 语言编写，通过 ChaCha20-Poly1305 加密将本地 SOCKS5/HTTP 请求安全转发到远端服务器，并支持本地端口转发到远程内网地址。
+轻量级加密隧道代理。用 Go 语言编写，通过 ChaCha20-Poly1305 加密将本地 SOCKS5/HTTP 请求安全转发到远端服务器，支持本地端口转发和反向端口转发。
 
 ## 功能特性
 
-- 单可执行文件，支持 client / server / forward 三种模式运行
+- 单可执行文件，支持 client / server / forward / reverse 四种模式运行
 - SOCKS5 TCP CONNECT 代理协议（RFC 1928）
 - HTTP/HTTPS 代理协议（CONNECT + 普通 HTTP 代理，自动检测）
 - 本地端口转发（类似 SSH `-L`，映射本地端口到远程内网地址）
+- 反向端口转发（类似 SSH `-R`，服务器端口映射回客户端内网）
 - ChaCha20-Poly1305 AEAD 加密隧道
 - 预共享密钥认证（支持密码短语和 hex 密钥两种输入方式）
 - 跨平台：Linux / Windows / macOS
@@ -190,6 +191,44 @@ curl -x http://127.0.0.1:1080 https://httpbin.org/ip
 ./proxy_ob forward -l :6379 -t 10.0.0.5:6379 -s "server-ip:8388" -k "key" &
 ```
 
+### reverse 子命令
+
+将服务器端口映射回客户端内网目标（类似 SSH `-R` 远程端口转发）。客户端主动连接服务器建立隧道，服务器开放端口供外部访问，流量通过隧道回到客户端内网。
+
+```
+用户                         Server                        Client (内网)
+│                             │                              │
+│  连接 server:3306           │                              │
+│ ──────────────────────────► │                              │
+│                             │ ── 控制信号 (session ID) ──► │  (已有隧道)
+│                             │  ◄── 新数据连接 ──────────── │  (client 发起)
+│                             │      handshake + session     │
+│                             │                  连接本地 ──► │  10.0.0.5:3306
+│  ◄═══════════════ 双向数据中继 ═══════════════════════════► │
+```
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `-r` | 反向转发规则 `listen_port:target_host:target_port`（必填） | 无 |
+| `-s` | 远端隧道服务器地址（必填） | 无 |
+| `-k` | 加密密钥（必填） | 无 |
+| `-v` | 详细调试日志 | 关闭 |
+| `-d` | 后台 Daemon 模式 | 关闭 |
+| `-c` | JSON 配置文件路径 | 无 |
+
+示例：
+
+```bash
+# 服务端（无需额外配置）
+./proxy_ob server -l :8388 -k "key"
+
+# 客户端：将服务器 :3306 映射回本地内网 MySQL
+./proxy_ob reverse -r 3306:10.0.0.5:3306 -s server-ip:8388 -k "key"
+
+# 外部用户连接服务器 3306 端口 → 通过隧道到客户端 → 连接 10.0.0.5:3306
+mysql -h server-ip -P 3306
+```
+
 ## 配置文件
 
 可以通过 JSON 配置文件代替命令行参数。格式如下：
@@ -215,14 +254,15 @@ curl -x http://127.0.0.1:1080 https://httpbin.org/ip
 
 字段说明：
 
-| 字段 | 说明 | client | server | forward |
-|------|------|--------|--------|---------|
-| `listen` | 监听地址 | `:1080` | `:8388` | 必填 |
-| `server` | 远端服务器地址 | 必填 | 不适用 | 必填 |
-| `key` | 加密密钥 | 必填 | 必填 | 必填 |
-| `target` | 转发目标地址 host:port | 不适用 | 不适用 | 必填 |
-| `verbose` | 详细调试日志 | `false` | `false` | `false` |
-| `daemon` | 后台 Daemon 模式 | `false` | `false` | `false` |
+| 字段 | 说明 | client | server | forward | reverse |
+|------|------|--------|--------|---------|---------|
+| `listen` | 监听地址 | `:1080` | `:8388` | 必填 | 不适用 |
+| `server` | 远端服务器地址 | 必填 | 不适用 | 必填 | 必填 |
+| `key` | 加密密钥 | 必填 | 必填 | 必填 | 必填 |
+| `target` | 转发目标地址 host:port | 不适用 | 不适用 | 必填 | 不适用 |
+| `reverse` | 反向转发规则 | 不适用 | 不适用 | 不适用 | 必填 |
+| `verbose` | 详细调试日志 | `false` | `false` | `false` | `false` |
+| `daemon` | 后台 Daemon 模式 | `false` | `false` | `false` | `false` |
 
 配置优先级：**命令行参数 > JSON 配置文件 > 默认值**
 
@@ -298,13 +338,15 @@ proxy_ob/
 ├── go.mod               # Go 模块定义
 ├── config.example.json  # 配置文件示例
 ├── cmd/
-│   ├── client.go        # 客户端模式 — SOCKS5 监听 + 隧道转发
+│   ├── client.go        # 客户端模式 — SOCKS5/HTTP 代理监听 + 隧道转发
 │   ├── forward.go       # 转发模式 — 本地端口转发到远程内网
+│   ├── reverse.go       # 反向模式 — 服务器端口映射回客户端内网
 │   ├── server.go        # 服务端模式 — 隧道监听 + 目标连接
+│   ├── server_reverse.go# 服务端反向隧道处理
 │   ├── daemon.go        # Daemon 模式共享逻辑（re-exec 后台）
 │   ├── daemon_unix.go   # Unix: setsid 脱离终端
 │   ├── daemon_windows.go# Windows: CREATE_NEW_PROCESS_GROUP 脱离控制台
-│   └── log.go           # 日志 helper（infof + verbosef）
+│   └── log.go           # 日志 helper（infof + verbosef + dialTimeout）
 └── internal/
     ├── config.go        # 配置解析（CLI 参数 + JSON 文件 + 密钥派生）
     ├── crypto.go        # ChaCha20-Poly1305 加密/解密 + HMAC 握手令牌
@@ -442,6 +484,13 @@ Linux amd64、Windows amd64、macOS arm64/amd64。Go 语言的交叉编译也支
 **可以同时运行多个 forward 实例吗？**
 
 可以。每个 forward 实例监听不同的本地端口、映射到不同的远程目标。只需确保本地端口不冲突即可。
+
+**reverse 和 forward 有什么区别？**
+
+`forward` 是本地端口转发（SSH `-L`）：本地端口 → 隧道 → 服务器端连接目标。
+`reverse` 是远程端口转发（SSH `-R`）：服务器端口 → 隧道 → 客户端连接内网目标。
+
+reverse 模式适用于客户端在 NAT 后方、需要被外部主动连接的场景（如在家暴露内网服务到公网服务器）。
 
 **如何生成安全的密钥？**
 

@@ -6,7 +6,7 @@
 
 ## OVERVIEW
 
-加密隧道代理。Go 1.25, ChaCha20-Poly1305 AEAD, SOCKS5 + HTTP/HTTPS 代理 + TCP 端口转发。单二进制 client/server/forward 三模式。唯一外部依赖 `golang.org/x/crypto`。
+加密隧道代理。Go 1.25, ChaCha20-Poly1305 AEAD, SOCKS5 + HTTP/HTTPS 代理 + TCP 端口转发 + 反向端口转发。单二进制 client/server/forward/reverse 四模式。唯一外部依赖 `golang.org/x/crypto`。
 
 ## STRUCTURE
 
@@ -17,11 +17,13 @@ proxy_ob/
 ├── cmd/                 # package cmd（非 main）— 运行模式实现
 │   ├── client.go        # RunClient() — SOCKS5/HTTP 代理监听 + 自动协议检测 + 隧道中继
 │   ├── forward.go       # RunForward() — TCP 端口转发 + 隧道中继
-│   ├── server.go        # RunServer() — 隧道监听 + 目标转发
+│   ├── reverse.go       # RunReverse() — 反向隧道客户端（控制连接 + 数据连接）
+│   ├── server.go        # RunServer() — 隧道监听 + 目标转发 + Atyp 分发
+│   ├── server_reverse.go# handleReverseRegistration() + handleReverseData()
 │   ├── daemon.go        # daemonize() + parseConfig() — 共享逻辑
 │   ├── daemon_unix.go   # !windows — setsid 脱离终端
 │   ├── daemon_windows.go# windows — CREATE_NEW_PROCESS_GROUP 脱离控制台
-│   └── log.go           # infof() + verbosef() 日志 helper
+│   └── log.go           # infof() + verbosef() + dialTimeout 日志 helper
 ├── internal/            # 共享协议库（Go internal 语义，外部不可导入）
 │   ├── config.go        # CLI flags + JSON config + SHA-256 密钥派生
 │   ├── crypto.go        # ChaCha20-Poly1305 加解密 + HMAC-SHA256 握手令牌
@@ -44,7 +46,9 @@ proxy_ob/
 | 改客户端行为 | `cmd/client.go` | `RunClient`, `handleConnection`, `handleSOCKS5`, `handleHTTPProxy`, `relay` |
 | 改协议自动检测 | `cmd/client.go` | `handleConnection` — Peek 首字节区分 SOCKS5/HTTP |
 | 改转发行为 | `cmd/forward.go` | `RunForward`, `handleForwardConnection`, `parseTargetAddr` |
-| 改服务端行为 | `cmd/server.go` | `RunServer`, `handleServerConnection` |
+| 改反向隧道客户端 | `cmd/reverse.go` | `RunReverse`, `handleReverseDataConn`, `parseReverseSpec`, `generateSessionID` |
+| 改反向隧道服务端 | `cmd/server_reverse.go` | `handleReverseRegistration`, `handleReverseData` |
+| 改服务端行为 | `cmd/server.go` | `RunServer`, `handleServerConnection`, `handleProxyTarget` |
 | 改 Daemon 逻辑 | `cmd/daemon.go` + `cmd/daemon_unix.go` / `cmd/daemon_windows.go` | `daemonize`, `daemonSysProcAttr` |
 | 改日志行为 | `cmd/log.go` | `infof`, `verbosef`, `initLogging` |
 | 改子命令路由 | `main.go` | `main()` |
@@ -56,7 +60,7 @@ proxy_ob/
 
 | 符号 | 类型 | 文件 | 作用 |
 |------|------|------|------|
-| `Config` | struct | config.go | 配置（Mode, Listen, Server, Key, Target, Verbose, Daemon） |
+| `Config` | struct | config.go | 配置（Mode, Listen, Server, Key, Target, Reverse, Verbose, Daemon） |
 | `ErrHelp` | var | config.go | help 请求哨兵错误 |
 | `Frame` | struct | tunnel.go | 隧道帧（Atyp, Addr, Port, Data） |
 | `Parse` | func | config.go | 解析 CLI flags + JSON 配置（client/server/forward） |
@@ -80,7 +84,11 @@ proxy_ob/
 |------|------|------|
 | `RunClient` | client.go | SOCKS5/HTTP 代理监听 → 协议自动检测 → 隧道握手 → 双向中继 |
 | `RunForward` | forward.go | TCP 监听 → 隧道握手 → 发送预配置目标 → 双向中继 |
-| `RunServer` | server.go | 隧道监听 → 握手验证 → 连接目标 → 双向中继 |
+| `RunReverse` | reverse.go | 控制连接注册 → 接收连接请求 → 发起数据连接 → 本地目标中继 |
+| `RunServer` | server.go | 隧道监听 → 握手验证 → Atyp 分发 → 连接目标/反向处理 |
+| `handleReverseRegistration` | server_reverse.go | Atyp=0x00: 开监听端口，用户连入时通过控制连接发 Atyp=0x02 连接请求 |
+| `handleReverseData` | server_reverse.go | Atyp=0x05: 匹配 session ID，relay 用户连接和数据连接 |
+| `handleProxyTarget` | server.go | Atyp=0x01/0x03/0x04: 正常代理/转发目标连接 |
 | `handleConnection` | client.go | 入口 — Peek 首字节分发 SOCKS5/HTTP |
 | `handleSOCKS5` | client.go | SOCKS5 握手 → 读取目标 → 隧道转发 |
 | `handleHTTPProxy` | client.go | HTTP 解析 → CONNECT/普通代理处理 → 隧道转发 |
@@ -112,6 +120,8 @@ proxy_ob/
 - **parseConfig 入口** — 所有 RunXxx 通过 `parseConfig()` 统一处理 daemon + verbose 初始化
 - **HTTP 代理改写** — 普通 HTTP 请求的绝对 URI 自动改写为相对路径，作为 Frame.Data 通过隧道首帧发送，server 端透传到目标
 - **server 端协议无关** — server 不区分 client 发来的是 SOCKS5 还是 HTTP 代理请求，仅看第一帧的目标地址
+- **反向隧道协议** — Atyp=0x00（注册）、Atyp=0x02（连接请求 server→client）、Atyp=0x05（反向数据 client→server）
+- **反向隧道流程** — client 建立控制连接注册 → server 开监听端口 → 用户连入时 server 通过控制连接发 session ID → client 发起新数据连接携带 session ID → server 匹配后双向中继
 
 ## ANTI-PATTERNS
 
@@ -133,6 +143,7 @@ make clean                                        # 清理
 ./proxy_ob client -s ip:8388 -k "key"            # 启动客户端（SOCKS5 + HTTP 代理）
 ./proxy_ob client -v -s ip:8388 -k "key"         # 详细日志模式
 ./proxy_ob forward -l :3306 -t 10.0.0.5:3306 -s ip:8388 -k "key"  # 端口转发
+./proxy_ob reverse -r 3306:10.0.0.5:3306 -s ip:8388 -k "key"       # 反向端口转发
 curl --socks5 127.0.0.1:1080 http://httpbin.org/ip  # 测试 SOCKS5
 curl -x http://127.0.0.1:1080 https://httpbin.org/ip  # 测试 HTTP/HTTPS 代理
 mysql -h 127.0.0.1 -P 3306                       # 测试端口转发
