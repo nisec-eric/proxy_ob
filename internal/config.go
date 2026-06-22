@@ -14,11 +14,12 @@ var ErrHelp = errors.New("help requested")
 
 // Config holds the application configuration.
 type Config struct {
-	Mode       string `json:"mode"`        // "client", "server", or "forward"
+	Mode       string `json:"mode"`        // "client", "server", "forward", or "reverse"
 	Listen     string `json:"listen"`      // listen address
-	Server     string `json:"server"`      // remote server address (client/forward only)
+	Server     string `json:"server"`      // remote server address (client/forward/reverse only)
 	Key        string `json:"key"`         // encryption key (hex or passphrase)
 	Target     string `json:"target"`      // forward target address host:port (forward only)
+	Reverse    string `json:"reverse"`     // reverse spec listen_port:target_host:target_port (reverse only)
 	Verbose    bool   `json:"verbose"`     // enable verbose debug logging
 	Daemon     bool   `json:"daemon"`      // run as background daemon
 	ConfigFile string `json:"config_file"` // optional JSON config file path
@@ -31,6 +32,7 @@ type jsonConfig struct {
 	Server  string `json:"server"`
 	Key     string `json:"key"`
 	Target  string `json:"target"`
+	Reverse string `json:"reverse"`
 	Verbose bool   `json:"verbose"`
 	Daemon  bool   `json:"daemon"`
 }
@@ -43,8 +45,8 @@ func Parse(args []string) (*Config, error) {
 	}
 
 	mode := args[0]
-	if mode != "client" && mode != "server" && mode != "forward" {
-		return nil, fmt.Errorf("unknown mode %q: must be \"client\", \"server\", or \"forward\"", mode)
+	if mode != "client" && mode != "server" && mode != "forward" && mode != "reverse" {
+		return nil, fmt.Errorf("unknown mode %q: must be \"client\", \"server\", \"forward\", or \"reverse\"", mode)
 	}
 
 	cfg := &Config{Mode: mode}
@@ -63,6 +65,7 @@ func Parse(args []string) (*Config, error) {
 	key := fs.String("k", "", "encryption key (hex or passphrase)")
 	configFile := fs.String("c", "", "optional JSON config file path")
 	target := fs.String("t", "", "target address host:port (forward only)")
+	reverse := fs.String("r", "", "reverse spec listen_port:target_host:target_port (reverse only)")
 	verbose := fs.Bool("v", false, "verbose debug logging")
 	daemon := fs.Bool("d", false, "run as background daemon")
 
@@ -96,6 +99,9 @@ func Parse(args []string) (*Config, error) {
 		if jc.Target != "" {
 			cfg.Target = jc.Target
 		}
+		if jc.Reverse != "" {
+			cfg.Reverse = jc.Reverse
+		}
 		cfg.Verbose = jc.Verbose
 		cfg.Daemon = jc.Daemon
 	}
@@ -114,6 +120,9 @@ func Parse(args []string) (*Config, error) {
 	}
 	if *target != "" {
 		cfg.Target = *target
+	}
+	if *reverse != "" {
+		cfg.Reverse = *reverse
 	}
 	if *verbose {
 		cfg.Verbose = true
@@ -135,6 +144,14 @@ func Parse(args []string) (*Config, error) {
 		}
 		if cfg.Target == "" {
 			return nil, fmt.Errorf("target address is required in forward mode: use -t flag or config file")
+		}
+	}
+	if mode == "reverse" {
+		if cfg.Server == "" {
+			return nil, fmt.Errorf("server address is required in reverse mode: use -s flag or config file")
+		}
+		if cfg.Reverse == "" {
+			return nil, fmt.Errorf("reverse spec is required in reverse mode: use -r flag or config file")
 		}
 	}
 
