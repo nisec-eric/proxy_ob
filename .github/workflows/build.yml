@@ -40,7 +40,8 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
-          go build -ldflags="-s -w" -o proxy_ob-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }} .
+          VERSION=$(echo "${{ github.ref_name }}" | sed 's/^v//')
+          go build -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o proxy_ob-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }} .
 
       - name: Upload artifact
         if: startsWith(github.ref, 'refs/tags/v')
@@ -72,6 +73,11 @@ jobs:
           mv artifacts/proxy_ob-darwin-arm64 proxy_ob-darwin-arm64
           mv artifacts/proxy_ob-darwin-amd64 proxy_ob-darwin-amd64
 
+      - name: Generate SHA256 checksums
+        run: |
+          sha256sum proxy_ob-linux-amd64 proxy_ob-windows-amd64.exe proxy_ob-darwin-arm64 proxy_ob-darwin-amd64 > checksums-sha256.txt
+          cat checksums-sha256.txt
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -81,3 +87,4 @@ jobs:
             proxy_ob-windows-amd64.exe
             proxy_ob-darwin-arm64
             proxy_ob-darwin-amd64
+            checksums-sha256.txt
