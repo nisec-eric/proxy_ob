@@ -103,3 +103,67 @@ func TestFrameEmptyData(t *testing.T) {
 	}
 	<-done
 }
+
+func TestFrameControlAtypNoAddress(t *testing.T) {
+	key := DeriveKey("k")
+
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+
+	original := &Frame{
+		Atyp: 0x00,
+		Port: 3306,
+		Data: []byte("10.0.0.5:3306"),
+	}
+
+	done := make(chan struct{})
+	go func() {
+		WriteFrame(client, key, original)
+		close(done)
+	}()
+
+	received, err := ReadFrame(server, key)
+	if err != nil {
+		t.Fatalf("ReadFrame: %v", err)
+	}
+	if received.Port != 3306 {
+		t.Errorf("port: got %d, want 3306", received.Port)
+	}
+	if string(received.Data) != "10.0.0.5:3306" {
+		t.Errorf("data: got %q", string(received.Data))
+	}
+	if len(received.Addr) != 0 {
+		t.Errorf("expected empty addr for control frame, got %d bytes", len(received.Addr))
+	}
+	<-done
+}
+
+func TestFrameReverseDataAtyp(t *testing.T) {
+	key := DeriveKey("k")
+
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+
+	sessionID := "abc12345"
+	original := &Frame{
+		Atyp: 0x05,
+		Data: []byte(sessionID),
+	}
+
+	done := make(chan struct{})
+	go func() {
+		WriteFrame(client, key, original)
+		close(done)
+	}()
+
+	received, err := ReadFrame(server, key)
+	if err != nil {
+		t.Fatalf("ReadFrame: %v", err)
+	}
+	if string(received.Data) != sessionID {
+		t.Errorf("data: got %q, want %q", string(received.Data), sessionID)
+	}
+	<-done
+}
