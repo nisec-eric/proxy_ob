@@ -54,7 +54,7 @@ func Parse(args []string) (*Config, error) {
 	// Set defaults per mode.
 	switch mode {
 	case "client":
-		cfg.Listen = ":1080"
+		cfg.Listen = "127.0.0.1:1080"
 	case "server":
 		cfg.Listen = ":8388"
 	}
