@@ -1,9 +1,9 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"os/signal"
@@ -30,7 +30,7 @@ func RunClient() {
 		os.Exit(1)
 	}
 
-	infof("listening on %s (SOCKS5)", cfg.Listen)
+	infof("listening on %s (SOCKS5 + HTTP proxy)", cfg.Listen)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -59,28 +59,51 @@ func RunClient() {
 	}
 }
 
-func handleConnection(socksConn net.Conn, cfg *internal.Config, key [32]byte) {
-	defer socksConn.Close()
+type bufferedConn struct {
+	r  *bufio.Reader
+	net.Conn
+}
 
-	if err := internal.Handshake(socksConn); err != nil {
-		return
-	}
+func (bc *bufferedConn) Read(b []byte) (int, error) {
+	return bc.r.Read(b)
+}
 
-	addr, port, atyp, err := internal.ReadRequest(socksConn)
+func handleConnection(conn net.Conn, cfg *internal.Config, key [32]byte) {
+	defer conn.Close()
+
+	br := bufio.NewReader(conn)
+	peek, err := br.Peek(1)
 	if err != nil {
 		return
 	}
 
-	verbosef("socks5 %s -> %s:%d", socksConn.RemoteAddr(), addr, port)
+	if peek[0] == 0x05 {
+		handleSOCKS5(&bufferedConn{r: br, Conn: conn}, cfg, key)
+	} else {
+		handleHTTPProxy(br, conn, cfg, key)
+	}
+}
+
+func handleSOCKS5(conn net.Conn, cfg *internal.Config, key [32]byte) {
+	if err := internal.Handshake(conn); err != nil {
+		return
+	}
+
+	addr, port, atyp, err := internal.ReadRequest(conn)
+	if err != nil {
+		return
+	}
+
+	verbosef("socks5 %s -> %s:%d", conn.RemoteAddr(), addr, port)
 
 	tunnelConn, err := net.Dial("tcp", cfg.Server)
 	if err != nil {
-		internal.SendReply(socksConn, internal.ReplyHostUnreachable)
+		internal.SendReply(conn, internal.ReplyHostUnreachable)
 		return
 	}
 
 	if err := internal.ClientHandshake(tunnelConn, key); err != nil {
-		internal.SendReply(socksConn, internal.ReplyGeneralFailure)
+		internal.SendReply(conn, internal.ReplyGeneralFailure)
 		tunnelConn.Close()
 		return
 	}
@@ -94,7 +117,7 @@ func handleConnection(socksConn net.Conn, cfg *internal.Config, key [32]byte) {
 	case 0x04:
 		addrBytes = net.ParseIP(addr).To16()
 	default:
-		internal.SendReply(socksConn, internal.ReplyGeneralFailure)
+		internal.SendReply(conn, internal.ReplyGeneralFailure)
 		tunnelConn.Close()
 		return
 	}
@@ -106,17 +129,77 @@ func handleConnection(socksConn net.Conn, cfg *internal.Config, key [32]byte) {
 		Data: nil,
 	}
 	if err := internal.WriteFrame(tunnelConn, key, addrFrame); err != nil {
-		internal.SendReply(socksConn, internal.ReplyGeneralFailure)
+		internal.SendReply(conn, internal.ReplyGeneralFailure)
 		tunnelConn.Close()
 		return
 	}
 
-	if err := internal.SendReply(socksConn, internal.ReplySucceeded); err != nil {
+	if err := internal.SendReply(conn, internal.ReplySucceeded); err != nil {
 		tunnelConn.Close()
 		return
 	}
 
-	relay(socksConn, tunnelConn, key)
+	relay(conn, tunnelConn, key)
+}
+
+func handleHTTPProxy(br *bufio.Reader, conn net.Conn, cfg *internal.Config, key [32]byte) {
+	host, port, isConnect, initialData, err := internal.ReadHTTPProxyRequest(br)
+	if err != nil {
+		return
+	}
+
+	verbosef("http %s -> %s:%d (connect=%v)", conn.RemoteAddr(), host, port, isConnect)
+
+	atyp, addrBytes := hostToAddrBytes(host)
+
+	tunnelConn, err := net.Dial("tcp", cfg.Server)
+	if err != nil {
+		if isConnect {
+			internal.SendHTTPResponse(conn, 502, "Bad Gateway")
+		}
+		return
+	}
+
+	if err := internal.ClientHandshake(tunnelConn, key); err != nil {
+		tunnelConn.Close()
+		if isConnect {
+			internal.SendHTTPResponse(conn, 502, "Bad Gateway")
+		}
+		return
+	}
+
+	addrFrame := &internal.Frame{
+		Atyp: atyp,
+		Addr: addrBytes,
+		Port: port,
+		Data: initialData,
+	}
+	if err := internal.WriteFrame(tunnelConn, key, addrFrame); err != nil {
+		tunnelConn.Close()
+		if isConnect {
+			internal.SendHTTPResponse(conn, 502, "Bad Gateway")
+		}
+		return
+	}
+
+	if isConnect {
+		if err := internal.SendHTTPResponse(conn, 200, "Connection established"); err != nil {
+			tunnelConn.Close()
+			return
+		}
+	}
+
+	relay(&bufferedConn{r: br, Conn: conn}, tunnelConn, key)
+}
+
+func hostToAddrBytes(host string) (byte, []byte) {
+	if ip := net.ParseIP(host); ip != nil {
+		if ip4 := ip.To4(); ip4 != nil {
+			return 0x01, ip4
+		}
+		return 0x04, ip.To16()
+	}
+	return 0x03, []byte(host)
 }
 
 func relay(socksConn, tunnelConn net.Conn, key [32]byte) {
@@ -162,8 +245,6 @@ func relay(socksConn, tunnelConn net.Conn, key [32]byte) {
 		for {
 			frame, err := internal.ReadFrame(tunnelConn, key)
 			if err != nil {
-				if err != io.EOF && err != io.ErrUnexpectedEOF {
-				}
 				closeAll()
 				return
 			}
