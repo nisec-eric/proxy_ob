@@ -10,7 +10,7 @@ import (
 
 // Frame represents a single tunnel frame with SOCKS5-style address encoding.
 type Frame struct {
-	Atyp byte   // 0x01=IPv4, 0x03=Domain, 0x04=IPv6
+	Atyp byte   // 0x01=IPv4, 0x03=Domain, 0x04=IPv6, 0x00/0x02/0x05=control
 	Addr []byte // address data (raw bytes for IPv4/IPv6, domain string bytes for domain)
 	Port uint16 // destination port
 	Data []byte // payload data
@@ -26,12 +26,13 @@ func WriteFrame(conn net.Conn, key [32]byte, frame *Frame) error {
 
 	// address bytes based on Atyp
 	switch frame.Atyp {
-	case 0x01: // IPv4
+	case 0x00, 0x02, 0x05:
+	case 0x01:
 		buf = append(buf, frame.Addr[:4]...)
-	case 0x03: // Domain
+	case 0x03:
 		buf = append(buf, byte(len(frame.Addr)))
 		buf = append(buf, frame.Addr...)
-	case 0x04: // IPv6
+	case 0x04:
 		buf = append(buf, frame.Addr[:16]...)
 	default:
 		return fmt.Errorf("unsupported atyp: 0x%02x", frame.Atyp)
@@ -99,14 +100,15 @@ func ReadFrame(conn net.Conn, key [32]byte) (*Frame, error) {
 
 	// address based on Atyp
 	switch frame.Atyp {
-	case 0x01: // IPv4
+	case 0x00, 0x02, 0x05:
+	case 0x01:
 		if offset+4 > len(plaintext) {
 			return nil, fmt.Errorf("plaintext too short for IPv4 address")
 		}
 		frame.Addr = net.IP(plaintext[offset : offset+4])
 		offset += 4
 
-	case 0x03: // Domain
+	case 0x03:
 		if offset+1 > len(plaintext) {
 			return nil, fmt.Errorf("plaintext too short for domain length")
 		}
@@ -119,7 +121,7 @@ func ReadFrame(conn net.Conn, key [32]byte) (*Frame, error) {
 		copy(frame.Addr, plaintext[offset:offset+domainLen])
 		offset += domainLen
 
-	case 0x04: // IPv6
+	case 0x04:
 		if offset+16 > len(plaintext) {
 			return nil, fmt.Errorf("plaintext too short for IPv6 address")
 		}
