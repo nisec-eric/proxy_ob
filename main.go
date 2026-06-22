@@ -13,7 +13,7 @@ func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: proxy_ob <client|server|forward|version> [flags]\n\n")
 		fmt.Fprintf(os.Stderr, "Commands:\n")
-		fmt.Fprintf(os.Stderr, "  client   Run as SOCKS5 client (local proxy)\n")
+		fmt.Fprintf(os.Stderr, "  client   Run as SOCKS5/HTTP proxy client (local proxy)\n")
 		fmt.Fprintf(os.Stderr, "  server   Run as tunnel server (remote proxy)\n")
 		fmt.Fprintf(os.Stderr, "  forward  Forward local port to remote target via tunnel\n")
 		fmt.Fprintf(os.Stderr, "  version  Print version\n")
@@ -32,7 +32,7 @@ func main() {
 	case "help", "-h", "--help":
 		fmt.Fprintf(os.Stderr, "Usage: proxy_ob <client|server|forward|version> [flags]\n\n")
 		fmt.Fprintf(os.Stderr, "Commands:\n")
-		fmt.Fprintf(os.Stderr, "  client   Run as SOCKS5 client (local proxy)\n")
+		fmt.Fprintf(os.Stderr, "  client   Run as SOCKS5/HTTP proxy client (local proxy)\n")
 		fmt.Fprintf(os.Stderr, "  server   Run as tunnel server (remote proxy)\n")
 		fmt.Fprintf(os.Stderr, "  forward  Forward local port to remote target via tunnel\n")
 		fmt.Fprintf(os.Stderr, "  version  Print version\n")

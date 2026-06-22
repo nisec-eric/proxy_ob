@@ -36,10 +36,10 @@ type jsonConfig struct {
 }
 
 // Parse parses CLI flags and optional JSON config file.
-// args is os.Args[1:] where the first element is the subcommand ("client" or "server").
+// args is os.Args[1:] where the first element is the subcommand.
 func Parse(args []string) (*Config, error) {
 	if len(args) == 0 {
-		return nil, fmt.Errorf("usage: proxy_ob <client|server> [flags]")
+		return nil, fmt.Errorf("usage: proxy_ob <client|server|forward> [flags]")
 	}
 
 	mode := args[0]
@@ -98,7 +98,6 @@ func Parse(args []string) (*Config, error) {
 		}
 		cfg.Verbose = jc.Verbose
 		cfg.Daemon = jc.Daemon
-		cfg.ConfigFile = *configFile
 	}
 
 	// CLI flags override JSON config and defaults.
