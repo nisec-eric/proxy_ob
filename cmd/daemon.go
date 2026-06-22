@@ -44,7 +44,10 @@ func daemonize() {
 		os.Exit(1)
 	}
 
-	fmt.Fprintf(os.Stderr, "daemon started, pid: %d, log: proxy_ob.log\n", proc.Pid)
+	pidFile := "proxy_ob.pid"
+	os.WriteFile(pidFile, []byte(fmt.Sprintf("%d\n", proc.Pid)), 0644)
+
+	fmt.Fprintf(os.Stderr, "daemon started, pid: %d, log: proxy_ob.log, pid file: %s\n", proc.Pid, pidFile)
 	proc.Release()
 	os.Exit(0)
 }
