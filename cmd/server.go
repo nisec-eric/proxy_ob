@@ -79,6 +79,21 @@ func handleServerConnection(tunnelConn net.Conn, key [32]byte) {
 		return
 	}
 
+	switch frame.Atyp {
+	case 0x00:
+		handleReverseRegistration(tunnelConn, key, frame)
+		return
+	case 0x05:
+		handleReverseData(tunnelConn, key, frame)
+		return
+	default:
+		handleProxyTarget(tunnelConn, key, frame)
+	}
+}
+
+func handleProxyTarget(tunnelConn net.Conn, key [32]byte, frame *internal.Frame) {
+	defer tunnelConn.Close()
+
 	var targetAddrPort string
 	switch frame.Atyp {
 	case 0x01:
