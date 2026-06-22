@@ -247,7 +247,7 @@ curl -x http://server-ip:1080 https://internal-api.corp
 
 ```json
 {
-  "listen": ":1080",
+  "listen": "127.0.0.1:1080",
   "server": "your-server-ip:8388",
   "key": "your-secret-key"
 }

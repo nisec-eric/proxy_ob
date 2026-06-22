@@ -65,7 +65,7 @@ func Parse(args []string) (*Config, error) {
 	key := fs.String("k", "", "encryption key (hex or passphrase)")
 	configFile := fs.String("c", "", "optional JSON config file path")
 	target := fs.String("t", "", "target address host:port (forward only)")
-	reverse := fs.String("r", "", "reverse spec listen_port:target_host:target_port (reverse only)")
+	reverse := fs.String("r", "", "reverse spec [bind:]port[:target] (reverse only)")
 	verbose := fs.Bool("v", false, "verbose debug logging")
 	daemon := fs.Bool("d", false, "run as background daemon")
 
