@@ -1,6 +1,11 @@
 package cmd
 
-import "log"
+import (
+	"log"
+	"time"
+)
+
+const dialTimeout = 10 * time.Second
 
 var verbose bool
 

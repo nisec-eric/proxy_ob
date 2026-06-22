@@ -86,18 +86,21 @@ func handleConnection(conn net.Conn, cfg *internal.Config, key [32]byte) {
 
 func handleSOCKS5(conn net.Conn, cfg *internal.Config, key [32]byte) {
 	if err := internal.Handshake(conn); err != nil {
+		verbosef("socks5 handshake: %v", err)
 		return
 	}
 
 	addr, port, atyp, err := internal.ReadRequest(conn)
 	if err != nil {
+		verbosef("socks5 read request: %v", err)
 		return
 	}
 
 	verbosef("socks5 %s -> %s:%d", conn.RemoteAddr(), addr, port)
 
-	tunnelConn, err := net.Dial("tcp", cfg.Server)
+	tunnelConn, err := net.DialTimeout("tcp", cfg.Server, dialTimeout)
 	if err != nil {
+		verbosef("dial tunnel %s: %v", cfg.Server, err)
 		internal.SendReply(conn, internal.ReplyHostUnreachable)
 		return
 	}
@@ -145,6 +148,7 @@ func handleSOCKS5(conn net.Conn, cfg *internal.Config, key [32]byte) {
 func handleHTTPProxy(br *bufio.Reader, conn net.Conn, cfg *internal.Config, key [32]byte) {
 	host, port, isConnect, initialData, err := internal.ReadHTTPProxyRequest(br)
 	if err != nil {
+		verbosef("http proxy parse: %v", err)
 		return
 	}
 
@@ -152,8 +156,9 @@ func handleHTTPProxy(br *bufio.Reader, conn net.Conn, cfg *internal.Config, key 
 
 	atyp, addrBytes := hostToAddrBytes(host)
 
-	tunnelConn, err := net.Dial("tcp", cfg.Server)
+	tunnelConn, err := net.DialTimeout("tcp", cfg.Server, dialTimeout)
 	if err != nil {
+		verbosef("dial tunnel %s: %v", cfg.Server, err)
 		if isConnect {
 			internal.SendHTTPResponse(conn, 502, "Bad Gateway")
 		}

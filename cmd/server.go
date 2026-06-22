@@ -31,6 +31,9 @@ func RunServer() {
 
 	infof("listening on %s (tunnel)", cfg.Listen)
 
+	const maxConns = 1024
+	sem := make(chan struct{}, maxConns)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -54,7 +57,11 @@ func RunServer() {
 				continue
 			}
 		}
-		go handleServerConnection(conn, key)
+		sem <- struct{}{}
+		go func() {
+			defer func() { <-sem }()
+			handleServerConnection(conn, key)
+		}()
 	}
 }
 
@@ -87,7 +94,7 @@ func handleServerConnection(tunnelConn net.Conn, key [32]byte) {
 
 	verbosef("tunnel %s -> target %s", tunnelConn.RemoteAddr(), targetAddrPort)
 
-	targetConn, err := net.Dial("tcp", targetAddrPort)
+	targetConn, err := net.DialTimeout("tcp", targetAddrPort, dialTimeout)
 	if err != nil {
 		verbosef("dial target %s: %v", targetAddrPort, err)
 		return
