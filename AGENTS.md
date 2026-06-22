@@ -6,7 +6,7 @@
 
 ## OVERVIEW
 
-加密隧道代理。Go 1.25, ChaCha20-Poly1305 AEAD, SOCKS5 + HTTP/HTTPS 代理 + TCP 端口转发 + 反向端口转发。单二进制 client/server/forward/reverse 四模式。唯一外部依赖 `golang.org/x/crypto`。
+加密隧道代理。Go 1.25, ChaCha20-Poly1305 AEAD, SOCKS5 + HTTP/HTTPS 代理 + TCP 端口转发 + 反向端口转发 + 反向通用代理。单二进制 client/server/forward/reverse 四模式。唯一外部依赖 `golang.org/x/crypto`。
 
 ## STRUCTURE
 
@@ -19,7 +19,7 @@ proxy_ob/
 │   ├── forward.go       # RunForward() — TCP 端口转发 + 隧道中继
 │   ├── reverse.go       # RunReverse() — 反向隧道客户端（控制连接 + 数据连接）
 │   ├── server.go        # RunServer() — 隧道监听 + 目标转发 + Atyp 分发
-│   ├── server_reverse.go# handleReverseRegistration() + handleReverseData()
+│   ├── server_reverse.go# handleReverseRegistration() + handleReverseData() + 反通用代理
 │   ├── daemon.go        # daemonize() + parseConfig() — 共享逻辑
 │   ├── daemon_unix.go   # !windows — setsid 脱离终端
 │   ├── daemon_windows.go# windows — CREATE_NEW_PROCESS_GROUP 脱离控制台
@@ -46,8 +46,8 @@ proxy_ob/
 | 改客户端行为 | `cmd/client.go` | `RunClient`, `handleConnection`, `handleSOCKS5`, `handleHTTPProxy`, `relay` |
 | 改协议自动检测 | `cmd/client.go` | `handleConnection` — Peek 首字节区分 SOCKS5/HTTP |
 | 改转发行为 | `cmd/forward.go` | `RunForward`, `handleForwardConnection`, `parseTargetAddr` |
-| 改反向隧道客户端 | `cmd/reverse.go` | `RunReverse`, `handleReverseDataConn`, `parseReverseSpec`, `generateSessionID` |
-| 改反向隧道服务端 | `cmd/server_reverse.go` | `handleReverseRegistration`, `handleReverseData` |
+| 改反向隧道客户端 | `cmd/reverse.go` | `RunReverse`, `handleReverseDataConn`, `parseReverseSpec`, `resolveFrameTarget`, `generateSessionID` |
+| 改反向隧道服务端 | `cmd/server_reverse.go` | `handleReverseRegistration`, `acceptReverseFixed`, `acceptReverseProxy`, `handleReverseProxyUserConn`, `handleReverseData` |
 | 改服务端行为 | `cmd/server.go` | `RunServer`, `handleServerConnection`, `handleProxyTarget` |
 | 改 Daemon 逻辑 | `cmd/daemon.go` + `cmd/daemon_unix.go` / `cmd/daemon_windows.go` | `daemonize`, `daemonSysProcAttr` |
 | 改日志行为 | `cmd/log.go` | `infof`, `verbosef`, `initLogging` |
@@ -84,10 +84,12 @@ proxy_ob/
 |------|------|------|
 | `RunClient` | client.go | SOCKS5/HTTP 代理监听 → 协议自动检测 → 隧道握手 → 双向中继 |
 | `RunForward` | forward.go | TCP 监听 → 隧道握手 → 发送预配置目标 → 双向中继 |
-| `RunReverse` | reverse.go | 控制连接注册 → 接收连接请求 → 发起数据连接 → 本地目标中继 |
+| `RunReverse` | reverse.go | 控制连接注册 → 接收连接请求（固定/动态目标） → 发起数据连接 → 本地目标中继 |
 | `RunServer` | server.go | 隧道监听 → 握手验证 → Atyp 分发 → 连接目标/反向处理 |
-| `handleReverseRegistration` | server_reverse.go | Atyp=0x00: 开监听端口，用户连入时通过控制连接发 Atyp=0x02 连接请求 |
-| `handleReverseData` | server_reverse.go | Atyp=0x05: 匹配 session ID，relay 用户连接和数据连接 |
+| `handleReverseRegistration` | server_reverse.go | Atyp=0x00: 解析 bind/target → 开固定或代理监听端口 |
+| `acceptReverseFixed` | server_reverse.go | 固定目标模式：用户连入时发 Atyp=0x02 连接请求 |
+| `acceptReverseProxy` | server_reverse.go | 通用代理模式：SOCKS5/HTTP 握手 + 发带目标地址的连接请求 |
+| `handleReverseData` | server_reverse.go | Atyp=0x05: 匹配 session ID，发送 initialData，relay 用户连接和数据连接 |
 | `handleProxyTarget` | server.go | Atyp=0x01/0x03/0x04: 正常代理/转发目标连接 |
 | `handleConnection` | client.go | 入口 — Peek 首字节分发 SOCKS5/HTTP |
 | `handleSOCKS5` | client.go | SOCKS5 握手 → 读取目标 → 隧道转发 |
@@ -120,8 +122,11 @@ proxy_ob/
 - **parseConfig 入口** — 所有 RunXxx 通过 `parseConfig()` 统一处理 daemon + verbose 初始化
 - **HTTP 代理改写** — 普通 HTTP 请求的绝对 URI 自动改写为相对路径，作为 Frame.Data 通过隧道首帧发送，server 端透传到目标
 - **server 端协议无关** — server 不区分 client 发来的是 SOCKS5 还是 HTTP 代理请求，仅看第一帧的目标地址
-- **反向隧道协议** — Atyp=0x00（注册）、Atyp=0x02（连接请求 server→client）、Atyp=0x05（反向数据 client→server）
+- **反向隧道协议** — Atyp=0x00（注册）、Atyp=0x02（固定目标连接请求 server→client）、Atyp=0x01/0x03/0x04（通用代理连接请求，携带目标地址）、Atyp=0x05（反向数据 client→server）
 - **反向隧道流程** — client 建立控制连接注册 → server 开监听端口 → 用户连入时 server 通过控制连接发 session ID → client 发起新数据连接携带 session ID → server 匹配后双向中继
+- **反通用代理** — `-r 端口`（无目标）→ server 开 SOCKS5/HTTP 代理监听，目标由用户动态指定 → 连接请求帧用正常 Atyp（0x01/0x03/0x04）携带目标地址，session ID 放 Data
+- **绑定地址约定** — `-r 1080` 默认 `127.0.0.1`（仅本机）；`-r :1080` 前缀 `:` 表示 `0.0.0.0`（全接口）；client 模式默认 `127.0.0.1:1080`
+- **注册帧 Data 格式** — `bindAddr\ntargetAddr`，targetAddr 为空表示代理模式
 
 ## ANTI-PATTERNS
 
