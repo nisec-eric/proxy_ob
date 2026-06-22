@@ -24,7 +24,7 @@ func RunReverse() {
 
 	key := internal.DeriveKey(cfg.Key)
 
-	listenPort, targetAddr, err := parseReverseSpec(cfg.Reverse)
+	bindAddr, listenPort, targetAddr, isProxy, err := parseReverseSpec(cfg.Reverse)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "invalid reverse spec %q: %v\n", cfg.Reverse, err)
 		os.Exit(1)
@@ -41,17 +41,22 @@ func RunReverse() {
 		os.Exit(1)
 	}
 
+	regData := bindAddr + "\n" + targetAddr
 	regFrame := &internal.Frame{
 		Atyp: 0x00,
 		Port: listenPort,
-		Data: []byte(targetAddr),
+		Data: []byte(regData),
 	}
 	if err := internal.WriteFrame(controlConn, key, regFrame); err != nil {
 		fmt.Fprintf(os.Stderr, "send registration: %v\n", err)
 		os.Exit(1)
 	}
 
-	infof("reverse tunnel: server :%d -> local %s", listenPort, targetAddr)
+	if isProxy {
+		infof("reverse proxy: %s:%d -> client (dynamic target)", bindAddr, listenPort)
+	} else {
+		infof("reverse tunnel: %s:%d -> client:%s", bindAddr, listenPort, targetAddr)
+	}
 
 	for {
 		frame, err := internal.ReadFrame(controlConn, key)
@@ -60,25 +65,52 @@ func RunReverse() {
 			return
 		}
 
-		if frame.Atyp == 0x02 {
-			sessionID := string(frame.Data)
+		sessionID := string(frame.Data)
+
+		switch frame.Atyp {
+		case 0x02:
 			go handleReverseDataConn(cfg.Server, key, sessionID, targetAddr)
+		default:
+			dynamicTarget := resolveFrameTarget(frame.Atyp, frame.Addr, frame.Port)
+			if dynamicTarget == "" {
+				verbosef("reverse proxy: invalid target from session %s", sessionID)
+				continue
+			}
+			go handleReverseDataConn(cfg.Server, key, sessionID, dynamicTarget)
 		}
 	}
 }
 
-func parseReverseSpec(spec string) (listenPort uint16, targetAddr string, err error) {
-	parts := strings.SplitN(spec, ":", 2)
-	if len(parts) != 2 {
-		return 0, "", fmt.Errorf("expected format listen_port:target_host:target_port")
+func parseReverseSpec(spec string) (bindAddr string, listenPort uint16, targetAddr string, isProxy bool, err error) {
+	bindAddr = "127.0.0.1"
+	if strings.HasPrefix(spec, ":") {
+		bindAddr = "0.0.0.0"
+		spec = spec[1:]
 	}
 
+	parts := strings.SplitN(spec, ":", 2)
 	port, parseErr := strconv.ParseUint(parts[0], 10, 16)
 	if parseErr != nil {
-		return 0, "", fmt.Errorf("invalid listen port: %w", parseErr)
+		return "", 0, "", false, fmt.Errorf("invalid listen port: %w", parseErr)
 	}
 
-	return uint16(port), parts[1], nil
+	if len(parts) == 1 {
+		return bindAddr, uint16(port), "", true, nil
+	}
+
+	return bindAddr, uint16(port), parts[1], false, nil
+}
+
+func resolveFrameTarget(atyp byte, addr []byte, port uint16) string {
+	switch atyp {
+	case 0x01:
+		return fmt.Sprintf("%s:%d", net.IP(addr).String(), port)
+	case 0x03:
+		return fmt.Sprintf("%s:%d", string(addr), port)
+	case 0x04:
+		return fmt.Sprintf("[%s]:%d", net.IP(addr).String(), port)
+	}
+	return ""
 }
 
 func handleReverseDataConn(serverAddr string, key [32]byte, sessionID, targetAddr string) {
