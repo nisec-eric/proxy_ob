@@ -1,11 +1,12 @@
 # proxy_ob
 
-轻量级加密隧道代理。用 Go 语言编写，通过 ChaCha20-Poly1305 加密将本地 SOCKS5 请求安全转发到远端服务器，并支持本地端口转发到远程内网地址。
+轻量级加密隧道代理。用 Go 语言编写，通过 ChaCha20-Poly1305 加密将本地 SOCKS5/HTTP 请求安全转发到远端服务器，并支持本地端口转发到远程内网地址。
 
 ## 功能特性
 
 - 单可执行文件，支持 client / server / forward 三种模式运行
 - SOCKS5 TCP CONNECT 代理协议（RFC 1928）
+- HTTP/HTTPS 代理协议（CONNECT + 普通 HTTP 代理，自动检测）
 - 本地端口转发（类似 SSH `-L`，映射本地端口到远程内网地址）
 - ChaCha20-Poly1305 AEAD 加密隧道
 - 预共享密钥认证（支持密码短语和 hex 密钥两种输入方式）
@@ -101,7 +102,12 @@ proxy_ob <client|server|forward|version> [flags]
 
 ### client 子命令
 
-在本地启动 SOCKS5 代理，将流量通过加密隧道转发到远端服务器。
+在本地启动代理，自动检测 SOCKS5 和 HTTP/HTTPS 协议（同一端口），将流量通过加密隧道转发到远端服务器。
+
+**支持的代理协议：**
+- **SOCKS5** — `curl --socks5` / 浏览器 SOCKS5 代理
+- **HTTPS (CONNECT)** — `curl -x http://` / 浏览器 HTTP 代理（HTTPS 网站）
+- **HTTP** — 普通 HTTP 代理（绝对 URI 请求，自动改写为相对路径）
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
@@ -117,6 +123,15 @@ proxy_ob <client|server|forward|version> [flags]
 ```bash
 ./proxy_ob client -s "1.2.3.4:8388" -k "my-secret-password"
 ./proxy_ob client -s "1.2.3.4:8388" -k "0123456789abcdef...abcdef" -l :9090
+
+# SOCKS5 代理
+curl --socks5 127.0.0.1:1080 http://httpbin.org/ip
+
+# HTTP 代理
+curl -x http://127.0.0.1:1080 http://httpbin.org/ip
+
+# HTTPS 代理（CONNECT 隧道）
+curl -x http://127.0.0.1:1080 https://httpbin.org/ip
 ```
 
 ### server 子命令
@@ -294,7 +309,8 @@ proxy_ob/
     ├── config.go        # 配置解析（CLI 参数 + JSON 文件 + 密钥派生）
     ├── crypto.go        # ChaCha20-Poly1305 加密/解密 + HMAC 握手令牌
     ├── tunnel.go        # 隧道帧协议（编码/解码/握手）
-    └── socks5.go        # SOCKS5 TCP CONNECT 协议实现
+    ├── socks5.go        # SOCKS5 TCP CONNECT 协议实现
+    └── http_proxy.go    # HTTP/HTTPS 代理协议解析（CONNECT + 普通 HTTP）
 ```
 
 ## 技术细节
@@ -326,6 +342,14 @@ Server 验证版本号和令牌，使用常量时间比较（`subtle.ConstantTim
 ### SOCKS5 协议
 
 仅支持 TCP CONNECT 命令（`0x01`），仅支持 NO AUTH 认证方式（`0x00`）。支持 IPv4、IPv6、域名三种地址类型。
+
+### HTTP/HTTPS 代理协议
+
+client 模式在同一端口自动检测 SOCKS5 和 HTTP 协议（首字节 `0x05` 为 SOCKS5，ASCII 字母为 HTTP）。
+
+- **CONNECT 方法**：解析 `CONNECT host:port`，建立隧道后回复 `200 Connection established`，后续透明转发（适用于 HTTPS）
+- **普通 HTTP 代理**：解析绝对 URI（如 `GET http://host/path`），提取目标 host:port，将请求行改写为相对路径后通过隧道转发，响应直接透传
+- **keep-alive**：CONNECT 为隧道模式天然支持；普通 HTTP 每连接处理一次请求
 
 ### 并发模型
 
@@ -406,7 +430,14 @@ Linux amd64、Windows amd64、macOS arm64/amd64。Go 语言的交叉编译也支
 
 **forward 和 client 有什么区别？**
 
-`client` 模式启动 SOCKS5 代理，每次连接的目标地址由 SOCKS5 客户端动态指定。`forward` 模式启动纯 TCP 端口转发，目标地址在启动时固定配置。forward 模式不需要客户端支持 SOCKS5 协议。
+`client` 模式启动 SOCKS5/HTTP 代理，每次连接的目标地址由代理客户端动态指定。`forward` 模式启动纯 TCP 端口转发，目标地址在启动时固定配置。forward 模式不需要客户端支持 SOCKS5 或 HTTP 代理协议。
+
+**client 支持哪些代理协议？**
+
+同一端口自动检测，无需配置切换：
+- **SOCKS5**：标准 SOCKS5 TCP CONNECT
+- **HTTPS (CONNECT)**：HTTP CONNECT 方法建立 TLS 隧道（浏览器 HTTPS 默认走这个）
+- **HTTP**：普通 HTTP 代理，自动将绝对 URI 改写为相对路径转发
 
 **可以同时运行多个 forward 实例吗？**
 
@@ -454,6 +485,7 @@ nohup ./proxy_ob server -l :8388 -k "my-key" > proxy.log 2>&1 &
 
 ```
 client:  socks5 127.0.0.1:54321 -> httpbin.org:80
+         http 127.0.0.1:54321 -> example.com:443 (connect=true)
 server:  tunnel 1.2.3.4:54321 -> target 10.0.0.5:3306
 forward: forward 127.0.0.1:54321 -> 10.0.0.5:3306
 ```
