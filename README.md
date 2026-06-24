@@ -523,26 +523,23 @@ AEAD 模式同时提供加密和完整性校验。ChaCha20 在没有 AES 硬件�
 
 **如何在后台运行？**
 
-使用内置 `-d` 参数（跨平台支持）：
+使用内置 `-d` 参数（跨平台支持）。日志和 PID 文件固定落在 `~/.proxy_ob/`（家目录不可写时回退到系统临时目录），因此二进制装到 PATH 后可在任意工作目录调用 `-d`：
 
 ```bash
-# 后台运行，日志输出到 proxy_ob.log
-./proxy_ob server -d -k "my-key"
+# 后台运行
+proxy_ob server -d -k "my-key"
 
 # 后台 + 详细日志
-./proxy_ob server -d -v -k "my-key"
-
-# 查看日志
-tail -f proxy_ob.log
+proxy_ob server -d -v -k "my-key"
 
 # 停止
-kill $(pgrep -f "proxy_ob server")
+kill $(cat ~/.proxy_ob/proxy_ob.pid 2>/dev/null || pgrep -f "proxy_ob server")
 ```
 
-或使用传统方式：
+或使用传统方式（日志输出就近）：
 
 ```bash
-nohup ./proxy_ob server -l :8388 -k "my-key" > proxy.log 2>&1 &
+nohup proxy_ob server -l :8388 -k "my-key" > proxy.log 2>&1 &
 ```
 
 **`-v` verbose 模式会记录什么？**

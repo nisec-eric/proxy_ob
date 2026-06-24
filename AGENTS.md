@@ -49,7 +49,7 @@ proxy_ob/
 | 改反向隧道客户端 | `cmd/reverse.go` | `RunReverse`, `handleReverseDataConn`, `parseReverseSpec`, `resolveFrameTarget`, `generateSessionID` |
 | 改反向隧道服务端 | `cmd/server_reverse.go` | `handleReverseRegistration`, `acceptReverseFixed`, `acceptReverseProxy`, `handleReverseProxyUserConn`, `handleReverseData` |
 | 改服务端行为 | `cmd/server.go` | `RunServer`, `handleServerConnection`, `handleProxyTarget` |
-| 改 Daemon 逻辑 | `cmd/daemon.go` + `cmd/daemon_unix.go` / `cmd/daemon_windows.go` | `daemonize`, `daemonSysProcAttr` |
+| 改 Daemon 逻辑 | `cmd/daemon.go` + `cmd/daemon_unix.go` / `cmd/daemon_windows.go` | `daemonize`, `daemonSysProcAttr`, `resolveDaemonPath` |
 | 改日志行为 | `cmd/log.go` | `infof`, `verbosef`, `initLogging` |
 | 改子命令路由 | `main.go` | `main()` |
 | 改 CI/构建 | `.github/workflows/build.yml` 或 `Makefile` | matrix strategy |
@@ -99,7 +99,7 @@ proxy_ob/
 | `relay` | client.go | 双向中继（client/forward 共用） |
 | `parseTargetAddr` | forward.go | 解析 host:port → (atyp, addr, port) |
 | `parseConfig` | daemon.go | 统一配置解析 + daemon 初始化 + 日志初始化 |
-| `daemonize` | daemon.go | re-exec 后台（去掉 -d，重定向到 proxy_ob.log） |
+| `daemonize` | daemon.go | re-exec 后台（去掉 -d，os.Executable() 拿真实路径，日志/PID 走 resolveDaemonPath 写入 ~/.proxy_ob/） |
 | `daemonSysProcAttr` | daemon_unix.go / daemon_windows.go | 平台特定进程属性 |
 | `initLogging` | log.go | 设置 verbose 级别 |
 | `infof` | log.go | 始终可见的日志 |
@@ -164,7 +164,7 @@ git tag v0.x.x && git push origin v0.x.x         # 触发 CI Release
 - **Wire 帧上限** ~65KB（uint16 长度前缀），足够代理场景
 - **forward 复用 server 逻辑** — 服务端不区分 SOCKS5、HTTP 代理和 forward，仅看第一帧的目标地址
 - **parseTargetAddr** — 支持 IPv4/IPv6/域名，自动判断 atyp
-- **Daemon re-exec** — 父进程去掉 `-d` 启动子进程，输出重定向到 `proxy_ob.log`，子进程正常退出父进程
+- **Daemon re-exec** — 父进程去掉 `-d` 启动子进程，用 `os.Executable()` 拿绝对路径 re-exec（不依赖 PATH/当前目录），日志和 PID 文件通过 `resolveDaemonPath()` 写入 `~/.proxy_ob/`（家目录不可写回退系统临时目录），子进程正常退出父进程
 - **Build tags** — `daemon_unix.go` 使用 `//go:build !windows`，`daemon_windows.go` 使用 `//go:build windows`，CI 交叉编译自动正确处理
 - **HTTP 代理 keep-alive 限制** — CONNECT 隧道天然支持持久连接；普通 HTTP 代理每连接处理一次请求（非 keep-alive）
 - **协议自动检测原理** — SOCKS5 首字节固定 `0x05`（版本号），HTTP 方法首字节为 ASCII 字母（C/G/P 等），通过 `bufio.Reader.Peek(1)` 无消费读取区分

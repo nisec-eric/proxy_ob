@@ -4,6 +4,7 @@ proxy_ob_linux
 proxy_ob.exe
 proxy_ob_mac
 *.exe
+dist/
 
 # Go
 go.work

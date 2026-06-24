@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"proxy_ob/internal"
 )
@@ -19,6 +20,18 @@ func parseConfig() (*internal.Config, error) {
 	return cfg, nil
 }
 
+// resolveDaemonPath 选择 daemon 文件（日志/PID）所在目录。
+// 优先级：~/.proxy_ob/ > 系统临时目录。
+func resolveDaemonPath(filename string) string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		dir := filepath.Join(home, ".proxy_ob")
+		if err := os.MkdirAll(dir, 0755); err == nil {
+			return filepath.Join(dir, filename)
+		}
+	}
+	return filepath.Join(os.TempDir(), filename)
+}
+
 func daemonize() {
 	args := make([]string, 0, len(os.Args))
 	for _, a := range os.Args {
@@ -27,9 +40,17 @@ func daemonize() {
 		}
 	}
 
-	logFile, err := os.OpenFile("proxy_ob.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	exe, err := os.Executable()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "daemon: cannot open log file: %v\n", err)
+		exe = os.Args[0]
+	}
+
+	logPath := resolveDaemonPath("proxy_ob.log")
+	pidPath := resolveDaemonPath("proxy_ob.pid")
+
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "daemon: cannot open log file %s: %v\n", logPath, err)
 		os.Exit(1)
 	}
 
@@ -38,16 +59,15 @@ func daemonize() {
 		Sys:   daemonSysProcAttr(),
 	}
 
-	proc, err := os.StartProcess(os.Args[0], args, attr)
+	proc, err := os.StartProcess(exe, args, attr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "daemon: %v\n", err)
 		os.Exit(1)
 	}
 
-	pidFile := "proxy_ob.pid"
-	os.WriteFile(pidFile, []byte(fmt.Sprintf("%d\n", proc.Pid)), 0644)
+	os.WriteFile(pidPath, fmt.Appendf(nil, "%d\n", proc.Pid), 0644)
 
-	fmt.Fprintf(os.Stderr, "daemon started, pid: %d, log: proxy_ob.log, pid file: %s\n", proc.Pid, pidFile)
+	fmt.Fprintf(os.Stderr, "daemon started, pid: %d, log: %s, pid file: %s\n", proc.Pid, logPath, pidPath)
 	proc.Release()
 	os.Exit(0)
 }
