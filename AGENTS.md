@@ -121,7 +121,7 @@ proxy_ob/
 - **bufferedConn** — 包装 `bufio.Reader` + `net.Conn`，支持 Peek 后继续 Read，使现有 SOCKS5 代码无需修改
 - **中继帧格式** — relay 帧用 `Atyp: 0x01, Addr: make([]byte, 4)` 哑值，Data 承载实际载荷
 - **配置优先级** — CLI flags > JSON config > 默认值
-- **上游代理链** — `-P http://` 或 `-P socks5://` 让 client/forward/reverse 连接 server 时穿过指定上游代理；`-U user:pass` 为 HTTP 代理附加 Basic 认证（凭证 base64 编码为 `Proxy-Authorization: Basic` 头）；`dialServer(cfg)` 统一封装（cfg.Proxy 为空则直连）；SOCKS5 仅支持 NO AUTH，HTTP Basic 认证仅 HTTP 代理生效
+- **上游代理链** — `-P http://` 或 `-P socks5://` 让 client/forward/reverse 连接 server 时穿过指定上游代理；`-U user:pass` 为 HTTP 代理附加 Basic 认证（凭证 base64 编码为 `Proxy-Authorization: Basic` 头）；`dialServer(cfg)` 统一封装（cfg.Proxy 为空则直连）；握手阶段用 `conn.SetDeadline(timeout)` 保护防半挂代理阻塞，成功后清除；SOCKS5 仅支持 NO AUTH，HTTP Basic 认证仅 HTTP 代理生效；启动时验证 Proxy scheme（http/socks5/socks5h/socks），https:// 等不支持的 scheme立即报错
 - **forward 模式无默认 listen** — 需用户显式指定 `-l`
 - **日志两级** — `infof()` 启动/关闭/错误，`verbosef()` 每连接详情（源→目标）
 - **daemon 跨平台** — `daemon.go` 共享 re-exec 逻辑，`daemon_unix.go` / `daemon_windows.go` 通过 build tag 提供平台特定 `SysProcAttr`

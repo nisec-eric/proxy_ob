@@ -448,7 +448,8 @@ client / forward / reverse 三种客户端模式连接 server 时，可穿过一
 
 限制：
 - SOCKS5 仅支持 NO AUTH（method 0x00），不支持用户名/密码认证
-- HTTP CONNECT 的 Basic 认证凭证以 base64 明文传输（HTTP 协议本身限制），建议仅用于可信网络或 HTTPS 代理
+- 仅支持 `http://`（明文）和 `socks5://` 上游代理；不支持 `https://`（需要 TLS 拨号，本项目不引入额外依赖）
+- HTTP CONNECT 的 Basic 认证凭证以 base64 明文传输（HTTP 协议本身限制），建议仅在可信内网使用
 
 ## 技术细节
 
