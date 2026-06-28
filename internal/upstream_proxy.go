@@ -21,7 +21,7 @@ func DialThroughProxy(proxyURL, proxyAuth, target string, timeout time.Duration)
 		return nil, fmt.Errorf("parse proxy url: %w", err)
 	}
 	switch u.Scheme {
-	case "http", "https":
+	case "http":
 		return dialHTTPConnect(u.Host, proxyAuth, target, timeout)
 	case "socks5", "socks5h", "socks":
 		return dialSOCKS5(u.Host, target, timeout)
@@ -50,6 +50,11 @@ func dialHTTPConnect(proxyAddr, proxyAuth, target string, timeout time.Duration)
 		return nil, fmt.Errorf("dial http proxy: %w", err)
 	}
 
+	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("set deadline: %w", err)
+	}
+
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n", target, target)
 	if proxyAuth != "" {
@@ -70,17 +75,20 @@ func dialHTTPConnect(proxyAddr, proxyAuth, target string, timeout time.Duration)
 		return nil, fmt.Errorf("read CONNECT status: %w", err)
 	}
 
-	var protoMajor, protoMinor, code int
-	if _, err := fmt.Sscanf(statusLine, "HTTP/%d.%d %d", &protoMajor, &protoMinor, &code); err != nil {
+	fields := strings.Fields(statusLine)
+	if len(fields) < 2 || !strings.HasPrefix(fields[0], "HTTP/") {
 		conn.Close()
-		return nil, fmt.Errorf("parse CONNECT status %q: %w", statusLine, err)
+		return nil, fmt.Errorf("malformed CONNECT status: %q", statusLine)
 	}
-	_ = protoMajor
-	_ = protoMinor
+	code, err := strconv.Atoi(fields[1])
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("parse CONNECT status code from %q: %w", statusLine, err)
+	}
 
 	if code != 200 {
 		conn.Close()
-		return nil, fmt.Errorf("CONNECT failed: %s", statusLine)
+		return nil, fmt.Errorf("CONNECT failed: %s", strings.TrimSpace(statusLine))
 	}
 
 	for {
@@ -94,6 +102,11 @@ func dialHTTPConnect(proxyAddr, proxyAuth, target string, timeout time.Duration)
 		}
 	}
 
+	if err := conn.SetDeadline(time.Time{}); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("clear deadline: %w", err)
+	}
+
 	return &bufferedConn{br, conn}, nil
 }
 
@@ -105,6 +118,11 @@ func dialSOCKS5(proxyAddr, target string, timeout time.Duration) (net.Conn, erro
 	conn, err := net.DialTimeout("tcp", proxyAddr, timeout)
 	if err != nil {
 		return nil, fmt.Errorf("dial socks5 proxy: %w", err)
+	}
+
+	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("set deadline: %w", err)
 	}
 
 	if _, err := conn.Write([]byte{0x05, 0x01, 0x00}); err != nil {
@@ -190,6 +208,11 @@ func dialSOCKS5(proxyAddr, target string, timeout time.Duration) (net.Conn, erro
 	if _, err := io.ReadFull(conn, make([]byte, 2)); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("socks5 reply port: %w", err)
+	}
+
+	if err := conn.SetDeadline(time.Time{}); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("clear deadline: %w", err)
 	}
 
 	return conn, nil

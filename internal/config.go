@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 )
@@ -177,11 +178,23 @@ func Parse(args []string) (*Config, error) {
 	if cfg.ProxyAuth != "" && cfg.Proxy == "" {
 		return nil, fmt.Errorf("proxy auth (-U) requires proxy URL (-P)")
 	}
-	if cfg.ProxyAuth != "" && !strings.HasPrefix(cfg.Proxy, "http://") && !strings.HasPrefix(cfg.Proxy, "https://") {
+	if cfg.ProxyAuth != "" && !strings.HasPrefix(cfg.Proxy, "http://") {
 		return nil, fmt.Errorf("proxy auth (-U) only supported with http:// proxy, got %q", cfg.Proxy)
 	}
 	if cfg.ProxyAuth != "" && !strings.Contains(cfg.ProxyAuth, ":") {
 		return nil, fmt.Errorf("proxy auth (-U) must be in 'user:pass' format")
+	}
+
+	if cfg.Proxy != "" {
+		u, err := url.Parse(cfg.Proxy)
+		if err != nil {
+			return nil, fmt.Errorf("invalid proxy URL (-P): %w", err)
+		}
+		switch u.Scheme {
+		case "http", "socks5", "socks5h", "socks":
+		default:
+			return nil, fmt.Errorf("unsupported proxy scheme %q: use http:// or socks5://", u.Scheme)
+		}
 	}
 
 	return cfg, nil
