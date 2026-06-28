@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 )
 
 var ErrHelp = errors.New("help requested")
@@ -21,6 +22,7 @@ type Config struct {
 	Target     string `json:"target"`      // forward target address host:port (forward only)
 	Reverse    string `json:"reverse"`     // reverse spec listen_port:target_host:target_port (reverse only)
 	Proxy      string `json:"proxy"`       // upstream proxy URL (http://host:port or socks5://host:port)
+	ProxyAuth  string `json:"proxy_auth"`  // upstream proxy credentials "user:pass" (HTTP Basic only)
 	Verbose    bool   `json:"verbose"`     // enable verbose debug logging
 	Daemon     bool   `json:"daemon"`      // run as background daemon
 	ConfigFile string `json:"config_file"` // optional JSON config file path
@@ -28,15 +30,16 @@ type Config struct {
 
 // jsonConfig mirrors Config for JSON unmarshalling.
 type jsonConfig struct {
-	Mode    string `json:"mode"`
-	Listen  string `json:"listen"`
-	Server  string `json:"server"`
-	Key     string `json:"key"`
-	Target  string `json:"target"`
-	Reverse string `json:"reverse"`
-	Proxy   string `json:"proxy"`
-	Verbose bool   `json:"verbose"`
-	Daemon  bool   `json:"daemon"`
+	Mode      string `json:"mode"`
+	Listen    string `json:"listen"`
+	Server    string `json:"server"`
+	Key       string `json:"key"`
+	Target    string `json:"target"`
+	Reverse   string `json:"reverse"`
+	Proxy     string `json:"proxy"`
+	ProxyAuth string `json:"proxy_auth"`
+	Verbose   bool   `json:"verbose"`
+	Daemon    bool   `json:"daemon"`
 }
 
 // Parse parses CLI flags and optional JSON config file.
@@ -69,6 +72,7 @@ func Parse(args []string) (*Config, error) {
 	target := fs.String("t", "", "target address host:port (forward only)")
 	reverse := fs.String("r", "", "reverse spec [bind:]port[:target] (reverse only)")
 	proxy := fs.String("P", "", "upstream proxy URL (http://host:port or socks5://host:port)")
+	proxyAuth := fs.String("U", "", "upstream proxy credentials 'user:pass' (HTTP Basic auth)")
 	verbose := fs.Bool("v", false, "verbose debug logging")
 	daemon := fs.Bool("d", false, "run as background daemon")
 
@@ -108,6 +112,9 @@ func Parse(args []string) (*Config, error) {
 		if jc.Proxy != "" {
 			cfg.Proxy = jc.Proxy
 		}
+		if jc.ProxyAuth != "" {
+			cfg.ProxyAuth = jc.ProxyAuth
+		}
 		cfg.Verbose = jc.Verbose
 		cfg.Daemon = jc.Daemon
 	}
@@ -132,6 +139,9 @@ func Parse(args []string) (*Config, error) {
 	}
 	if *proxy != "" {
 		cfg.Proxy = *proxy
+	}
+	if *proxyAuth != "" {
+		cfg.ProxyAuth = *proxyAuth
 	}
 	if *verbose {
 		cfg.Verbose = true
@@ -162,6 +172,16 @@ func Parse(args []string) (*Config, error) {
 		if cfg.Reverse == "" {
 			return nil, fmt.Errorf("reverse spec is required in reverse mode: use -r flag or config file")
 		}
+	}
+
+	if cfg.ProxyAuth != "" && cfg.Proxy == "" {
+		return nil, fmt.Errorf("proxy auth (-U) requires proxy URL (-P)")
+	}
+	if cfg.ProxyAuth != "" && !strings.HasPrefix(cfg.Proxy, "http://") && !strings.HasPrefix(cfg.Proxy, "https://") {
+		return nil, fmt.Errorf("proxy auth (-U) only supported with http:// proxy, got %q", cfg.Proxy)
+	}
+	if cfg.ProxyAuth != "" && !strings.Contains(cfg.ProxyAuth, ":") {
+		return nil, fmt.Errorf("proxy auth (-U) must be in 'user:pass' format")
 	}
 
 	return cfg, nil

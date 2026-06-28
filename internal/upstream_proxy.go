@@ -2,24 +2,27 @@ package internal
 
 import (
 	"bufio"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
 // DialThroughProxy dials target through an upstream proxy.
 // proxyURL scheme must be http:// or socks5://.
-func DialThroughProxy(proxyURL, target string, timeout time.Duration) (net.Conn, error) {
+// proxyAuth is "user:pass" for HTTP Basic auth (ignored by SOCKS5).
+func DialThroughProxy(proxyURL, proxyAuth, target string, timeout time.Duration) (net.Conn, error) {
 	u, err := url.Parse(proxyURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse proxy url: %w", err)
 	}
 	switch u.Scheme {
 	case "http", "https":
-		return dialHTTPConnect(u.Host, target, timeout)
+		return dialHTTPConnect(u.Host, proxyAuth, target, timeout)
 	case "socks5", "socks5h", "socks":
 		return dialSOCKS5(u.Host, target, timeout)
 	default:
@@ -34,7 +37,7 @@ type bufferedConn struct {
 
 func (b *bufferedConn) Read(p []byte) (int, error) { return b.Reader.Read(p) }
 
-func dialHTTPConnect(proxyAddr, target string, timeout time.Duration) (net.Conn, error) {
+func dialHTTPConnect(proxyAddr, proxyAuth, target string, timeout time.Duration) (net.Conn, error) {
 	if proxyAddr == "" {
 		proxyAddr = "80"
 	}
@@ -47,8 +50,15 @@ func dialHTTPConnect(proxyAddr, target string, timeout time.Duration) (net.Conn,
 		return nil, fmt.Errorf("dial http proxy: %w", err)
 	}
 
-	req := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target)
-	if _, err := conn.Write([]byte(req)); err != nil {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n", target, target)
+	if proxyAuth != "" {
+		cred := base64.StdEncoding.EncodeToString([]byte(proxyAuth))
+		fmt.Fprintf(&sb, "Proxy-Authorization: Basic %s\r\n", cred)
+	}
+	sb.WriteString("\r\n")
+
+	if _, err := conn.Write([]byte(sb.String())); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("send CONNECT: %w", err)
 	}

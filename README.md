@@ -118,6 +118,7 @@ proxy_ob <client|server|forward|version> [flags]
 | `-s` | 远端隧道服务器地址（必填） | 无 |
 | `-k` | 加密密钥（必填） | 无 |
 | `-P` | 上游代理 URL（`http://host:port` 或 `socks5://host:port`） | 无 |
+| `-U` | 上游代理凭证 `user:pass`（仅 HTTP Basic 认证） | 无 |
 | `-v` | 详细调试日志（记录目标域名/IP） | 关闭 |
 | `-d` | 后台 Daemon 模式 | 关闭 |
 | `-c` | JSON 配置文件路径 | 无 |
@@ -130,6 +131,9 @@ proxy_ob <client|server|forward|version> [flags]
 
 # 通过公司 HTTP 代理连接 server
 ./proxy_ob client -s "server:8388" -k "key" -P http://corp-proxy:8080
+
+# 通过需要 Basic 认证的 HTTP 代理
+./proxy_ob client -s "server:8388" -k "key" -P http://corp-proxy:8080 -U alice:p@ss:word
 
 # 通过 SOCKS5 上游代理连接 server
 ./proxy_ob client -s "server:8388" -k "key" -P socks5://127.0.0.1:1080
@@ -183,6 +187,7 @@ curl -x http://127.0.0.1:1080 https://httpbin.org/ip
 | `-s` | 远端隧道服务器地址（必填） | 无 |
 | `-k` | 加密密钥（必填） | 无 |
 | `-P` | 上游代理 URL（`http://` 或 `socks5://`） | 无 |
+| `-U` | 上游代理凭证 `user:pass`（仅 HTTP Basic） | 无 |
 | `-v` | 详细调试日志 | 关闭 |
 | `-d` | 后台 Daemon 模式 | 关闭 |
 | `-c` | JSON 配置文件路径 | 无 |
@@ -222,6 +227,7 @@ curl -x http://127.0.0.1:1080 https://httpbin.org/ip
 | `-s` | 远端隧道服务器地址（必填） | 无 |
 | `-k` | 加密密钥（必填） | 无 |
 | `-P` | 上游代理 URL（`http://` 或 `socks5://`） | 无 |
+| `-U` | 上游代理凭证 `user:pass`（仅 HTTP Basic） | 无 |
 | `-v` | 详细调试日志 | 关闭 |
 | `-d` | 后台 Daemon 模式 | 关闭 |
 | `-c` | JSON 配置文件路径 | 无 |
@@ -287,6 +293,7 @@ curl -x http://server-ip:1080 https://internal-api.corp
 | `target` | 转发目标地址 host:port | 不适用 | 不适用 | 必填 | 不适用 |
 | `reverse` | 反向转发规则 | 不适用 | 不适用 | 不适用 | 必填 |
 | `proxy` | 上游代理 URL | 可选 | 不适用 | 可选 | 可选 |
+| `proxy_auth` | 上游代理凭证 `user:pass` | 可选 | 不适用 | 可选 | 可选 |
 | `verbose` | 详细调试日志 | `false` | `false` | `false` | `false` |
 | `daemon` | 后台 Daemon 模式 | `false` | `false` | `false` | `false` |
 
@@ -393,13 +400,20 @@ client / forward / reverse 三种客户端模式连接 server 时，可穿过一
 | `http://host:port` | HTTP CONNECT | 默认端口 80，最常见（公司代理） |
 | `socks5://host:port` | SOCKS5 | 默认端口 1080，NO AUTH 模式 |
 
+需要 Basic 认证的 HTTP 代理用 `-U user:pass` 单独传凭证（不走 URL 嵌入，避免特殊字符转义问题）。程序内部 base64 编码后发 `Proxy-Authorization: Basic` 头。
+
+`-U` 格式约定：
+- 冒号分隔，第一个冒号前是用户名，之后是密码（密码可含冒号、`@`、空格等任意字符）
+- 用户名不能含冒号
+- 仅对 HTTP 代理生效（SOCKS5 仅支持 NO AUTH）
+
 数据流（client 模式为例）：
 
 ```
 应用 → client (SOCKS5/HTTP 监听)
          │
          ▼
-       上游代理 (HTTP CONNECT 或 SOCKS5)   ← -P 指定
+       上游代理 (HTTP CONNECT 或 SOCKS5)   ← -P 指定，-U 附加 Basic 认证
          │
          ▼
        proxy_ob server (隧道监听)
@@ -408,11 +422,16 @@ client / forward / reverse 三种客户端模式连接 server 时，可穿过一
        目标服务器
 ```
 
-`-P` 只影响 client → server 这一段。client 本地监听的 SOCKS5/HTTP 协议、server 端的目标连接都不受影响。上游代理不参与加密隧道协议，仅做 TCP 转发，因此任何标准 HTTP/SOCKS5 代理都兼容（Squid、tinyproxy、mitmproxy、ssh -D 等）。
+`-P` / `-U` 只影响 client → server 这一段。client 本地监听的 SOCKS5/HTTP 协议、server 端的目标连接都不受影响。上游代理不参与加密隧道协议，仅做 TCP 转发，因此任何标准 HTTP/SOCKS5 代理都兼容（Squid、tinyproxy、mitmproxy、ssh -D 等）。
 
 ```bash
 # 经过公司 HTTP 代理连接到部署在公网的 server
 ./proxy_ob client -s "server:8388" -k "key" -P http://corp-proxy.corp:8080
+
+# 公司代理需要 Basic 认证
+./proxy_ob client -s "server:8388" -k "key" \
+  -P http://corp-proxy.corp:8080 \
+  -U 'alice:p@ss:word'
 
 # forward 模式同样支持
 ./proxy_ob forward -l :3306 -t 10.0.0.5:3306 -s "server:8388" -k "key" -P socks5://127.0.0.1:1080
@@ -422,13 +441,14 @@ client / forward / reverse 三种客户端模式连接 server 时，可穿过一
   "mode": "client",
   "server": "server:8388",
   "key": "key",
-  "proxy": "http://corp-proxy.corp:8080"
+  "proxy": "http://corp-proxy.corp:8080",
+  "proxy_auth": "alice:p@ss:word"
 }
 ```
 
 限制：
 - SOCKS5 仅支持 NO AUTH（method 0x00），不支持用户名/密码认证
-- HTTP CONNECT 不支持 Proxy-Authorization 认证头
+- HTTP CONNECT 的 Basic 认证凭证以 base64 明文传输（HTTP 协议本身限制），建议仅用于可信网络或 HTTPS 代理
 
 ## 技术细节
 
