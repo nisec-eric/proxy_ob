@@ -30,7 +30,7 @@ func RunReverse() {
 		os.Exit(1)
 	}
 
-	controlConn, err := net.DialTimeout("tcp", cfg.Server, dialTimeout)
+	controlConn, err := dialServer(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "dial server: %v\n", err)
 		os.Exit(1)
@@ -69,14 +69,14 @@ func RunReverse() {
 
 		switch frame.Atyp {
 		case 0x02:
-			go handleReverseDataConn(cfg.Server, key, sessionID, targetAddr)
+			go handleReverseDataConn(cfg, key, sessionID, targetAddr)
 		default:
 			dynamicTarget := resolveFrameTarget(frame.Atyp, frame.Addr, frame.Port)
 			if dynamicTarget == "" {
 				verbosef("reverse proxy: invalid target from session %s", sessionID)
 				continue
 			}
-			go handleReverseDataConn(cfg.Server, key, sessionID, dynamicTarget)
+			go handleReverseDataConn(cfg, key, sessionID, dynamicTarget)
 		}
 	}
 }
@@ -113,8 +113,8 @@ func resolveFrameTarget(atyp byte, addr []byte, port uint16) string {
 	return ""
 }
 
-func handleReverseDataConn(serverAddr string, key [32]byte, sessionID, targetAddr string) {
-	dataConn, err := net.DialTimeout("tcp", serverAddr, dialTimeout)
+func handleReverseDataConn(cfg *internal.Config, key [32]byte, sessionID, targetAddr string) {
+	dataConn, err := dialServer(cfg)
 	if err != nil {
 		verbosef("reverse data dial: %v", err)
 		return

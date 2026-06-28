@@ -10,6 +10,7 @@
 - 本地端口转发（类似 SSH `-L`，映射本地端口到远程内网地址）
 - 反向端口转发（类似 SSH `-R`，服务器端口映射回客户端内网）
 - 反向通用代理（服务器暴露 SOCKS5/HTTP 代理，目标动态指定）
+- 上游代理链（client/forward/reverse 连接 server 时穿过 HTTP/SOCKS5 上游代理）
 - ChaCha20-Poly1305 AEAD 加密隧道
 - 预共享密钥认证（支持密码短语和 hex 密钥两种输入方式）
 - 跨平台：Linux / Windows / macOS
@@ -116,6 +117,7 @@ proxy_ob <client|server|forward|version> [flags]
 | `-l` | 本地 SOCKS5/HTTP 代理监听地址 | `127.0.0.1:1080` |
 | `-s` | 远端隧道服务器地址（必填） | 无 |
 | `-k` | 加密密钥（必填） | 无 |
+| `-P` | 上游代理 URL（`http://host:port` 或 `socks5://host:port`） | 无 |
 | `-v` | 详细调试日志（记录目标域名/IP） | 关闭 |
 | `-d` | 后台 Daemon 模式 | 关闭 |
 | `-c` | JSON 配置文件路径 | 无 |
@@ -125,6 +127,12 @@ proxy_ob <client|server|forward|version> [flags]
 ```bash
 ./proxy_ob client -s "1.2.3.4:8388" -k "my-secret-password"
 ./proxy_ob client -s "1.2.3.4:8388" -k "0123456789abcdef...abcdef" -l :9090
+
+# 通过公司 HTTP 代理连接 server
+./proxy_ob client -s "server:8388" -k "key" -P http://corp-proxy:8080
+
+# 通过 SOCKS5 上游代理连接 server
+./proxy_ob client -s "server:8388" -k "key" -P socks5://127.0.0.1:1080
 
 # SOCKS5 代理
 curl --socks5 127.0.0.1:1080 http://httpbin.org/ip
@@ -174,6 +182,7 @@ curl -x http://127.0.0.1:1080 https://httpbin.org/ip
 | `-t` | 远程目标地址 host:port（必填） | 无 |
 | `-s` | 远端隧道服务器地址（必填） | 无 |
 | `-k` | 加密密钥（必填） | 无 |
+| `-P` | 上游代理 URL（`http://` 或 `socks5://`） | 无 |
 | `-v` | 详细调试日志 | 关闭 |
 | `-d` | 后台 Daemon 模式 | 关闭 |
 | `-c` | JSON 配置文件路径 | 无 |
@@ -183,6 +192,9 @@ curl -x http://127.0.0.1:1080 https://httpbin.org/ip
 ```bash
 # 将本地 :3306 转发到远程内网 MySQL
 ./proxy_ob forward -l :3306 -t 10.0.0.5:3306 -s "server-ip:8388" -k "my-secret"
+
+# 通过上游代理连接 server
+./proxy_ob forward -l :3306 -t 10.0.0.5:3306 -s "server-ip:8388" -k "my-secret" -P http://corp-proxy:8080
 
 # 将本地 :8080 转发到远程内网 Web 服务
 ./proxy_ob forward -l :8080 -t internal-api.corp:80 -s "server-ip:8388" -k "my-secret"
@@ -209,6 +221,7 @@ curl -x http://127.0.0.1:1080 https://httpbin.org/ip
 | `-r` | 反向规则（必填） | 无 |
 | `-s` | 远端隧道服务器地址（必填） | 无 |
 | `-k` | 加密密钥（必填） | 无 |
+| `-P` | 上游代理 URL（`http://` 或 `socks5://`） | 无 |
 | `-v` | 详细调试日志 | 关闭 |
 | `-d` | 后台 Daemon 模式 | 关闭 |
 | `-c` | JSON 配置文件路径 | 无 |
@@ -273,6 +286,7 @@ curl -x http://server-ip:1080 https://internal-api.corp
 | `key` | 加密密钥 | 必填 | 必填 | 必填 | 必填 |
 | `target` | 转发目标地址 host:port | 不适用 | 不适用 | 必填 | 不适用 |
 | `reverse` | 反向转发规则 | 不适用 | 不适用 | 不适用 | 必填 |
+| `proxy` | 上游代理 URL | 可选 | 不适用 | 可选 | 可选 |
 | `verbose` | 详细调试日志 | `false` | `false` | `false` | `false` |
 | `daemon` | 后台 Daemon 模式 | `false` | `false` | `false` | `false` |
 
@@ -363,9 +377,58 @@ proxy_ob/
     ├── config.go        # 配置解析（CLI 参数 + JSON 文件 + 密钥派生）
     ├── crypto.go        # ChaCha20-Poly1305 加密/解密 + HMAC 握手令牌
     ├── tunnel.go        # 隧道帧协议（编码/解码/握手）
+    ├── upstream_proxy.go# 上游代理拨号（HTTP CONNECT + SOCKS5 client）
     ├── socks5.go        # SOCKS5 TCP CONNECT 协议实现
     └── http_proxy.go    # HTTP/HTTPS 代理协议解析（CONNECT + 普通 HTTP）
 ```
+
+## 上游代理链
+
+client / forward / reverse 三种客户端模式连接 server 时，可穿过一个上游 HTTP 或 SOCKS5 代理。典型场景：公司网络只允许通过 corp proxy 出网，本机无法直连 server。
+
+通过 `-P` / `--proxy` flag 或 JSON 配置的 `proxy` 字段指定上游代理 URL：
+
+| URL 格式 | 协议 | 说明 |
+|---------|------|------|
+| `http://host:port` | HTTP CONNECT | 默认端口 80，最常见（公司代理） |
+| `socks5://host:port` | SOCKS5 | 默认端口 1080，NO AUTH 模式 |
+
+数据流（client 模式为例）：
+
+```
+应用 → client (SOCKS5/HTTP 监听)
+         │
+         ▼
+       上游代理 (HTTP CONNECT 或 SOCKS5)   ← -P 指定
+         │
+         ▼
+       proxy_ob server (隧道监听)
+         │
+         ▼
+       目标服务器
+```
+
+`-P` 只影响 client → server 这一段。client 本地监听的 SOCKS5/HTTP 协议、server 端的目标连接都不受影响。上游代理不参与加密隧道协议，仅做 TCP 转发，因此任何标准 HTTP/SOCKS5 代理都兼容（Squid、tinyproxy、mitmproxy、ssh -D 等）。
+
+```bash
+# 经过公司 HTTP 代理连接到部署在公网的 server
+./proxy_ob client -s "server:8388" -k "key" -P http://corp-proxy.corp:8080
+
+# forward 模式同样支持
+./proxy_ob forward -l :3306 -t 10.0.0.5:3306 -s "server:8388" -k "key" -P socks5://127.0.0.1:1080
+
+# 通过 JSON 配置
+{
+  "mode": "client",
+  "server": "server:8388",
+  "key": "key",
+  "proxy": "http://corp-proxy.corp:8080"
+}
+```
+
+限制：
+- SOCKS5 仅支持 NO AUTH（method 0x00），不支持用户名/密码认证
+- HTTP CONNECT 不支持 Proxy-Authorization 认证头
 
 ## 技术细节
 

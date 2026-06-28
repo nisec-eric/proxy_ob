@@ -6,7 +6,7 @@
 
 ## OVERVIEW
 
-加密隧道代理。Go 1.25, ChaCha20-Poly1305 AEAD, SOCKS5 + HTTP/HTTPS 代理 + TCP 端口转发 + 反向端口转发 + 反向通用代理。单二进制 client/server/forward/reverse 四模式。唯一外部依赖 `golang.org/x/crypto`。
+加密隧道代理。Go 1.25, ChaCha20-Poly1305 AEAD, SOCKS5 + HTTP/HTTPS 代理 + TCP 端口转发 + 反向端口转发 + 反向通用代理 + 上游代理链。单二进制 client/server/forward/reverse 四模式。唯一外部依赖 `golang.org/x/crypto`。
 
 ## STRUCTURE
 
@@ -23,11 +23,13 @@ proxy_ob/
 │   ├── daemon.go        # daemonize() + parseConfig() — 共享逻辑
 │   ├── daemon_unix.go   # !windows — setsid 脱离终端
 │   ├── daemon_windows.go# windows — CREATE_NEW_PROCESS_GROUP 脱离控制台
+│   ├── dial.go          # dialServer() — 统一 server 拨号（直连或穿过上游代理）
 │   └── log.go           # infof() + verbosef() + dialTimeout 日志 helper
 ├── internal/            # 共享协议库（Go internal 语义，外部不可导入）
 │   ├── config.go        # CLI flags + JSON config + SHA-256 密钥派生
 │   ├── crypto.go        # ChaCha20-Poly1305 加解密 + HMAC-SHA256 握手令牌
 │   ├── tunnel.go        # 帧协议编解码 + 握手认证
+│   ├── upstream_proxy.go# 上游代理拨号（HTTP CONNECT + SOCKS5 client 握手）
 │   ├── socks5.go        # RFC 1928 SOCKS5 TCP CONNECT 子集
 │   └── http_proxy.go    # HTTP/HTTPS 代理协议解析（CONNECT + 普通 HTTP）
 └── .github/workflows/
@@ -42,6 +44,7 @@ proxy_ob/
 | 改 HTTP 代理 | `internal/http_proxy.go` | `ReadHTTPProxyRequest`, `SendHTTPResponse` |
 | 改加密方式 | `internal/crypto.go` | `Encrypt`, `Decrypt`, `HandshakeToken` |
 | 改隧道帧格式 | `internal/tunnel.go` | `WriteFrame`, `ReadFrame`, `Frame` struct |
+| 改上游代理链 | `internal/upstream_proxy.go` + `cmd/dial.go` | `DialThroughProxy`, `dialServer` |
 | 改配置/参数 | `internal/config.go` | `Parse`, `DeriveKey`, `Config` struct |
 | 改客户端行为 | `cmd/client.go` | `RunClient`, `handleConnection`, `handleSOCKS5`, `handleHTTPProxy`, `relay` |
 | 改协议自动检测 | `cmd/client.go` | `handleConnection` — Peek 首字节区分 SOCKS5/HTTP |
@@ -77,6 +80,7 @@ proxy_ob/
 | `SendReply` | func | socks5.go | 发送 SOCKS5 回复（10 字节固定格式） |
 | `ReadHTTPProxyRequest` | func | http_proxy.go | 解析 HTTP CONNECT/普通代理请求，返回目标+初始数据 |
 | `SendHTTPResponse` | func | http_proxy.go | 发送 HTTP 响应（如 200 Connection established） |
+| `DialThroughProxy` | func | upstream_proxy.go | 通过上游代理（HTTP CONNECT 或 SOCKS5）建立到目标的 TCP 连接 |
 
 ### cmd（package cmd）
 
@@ -97,6 +101,7 @@ proxy_ob/
 | `bufferedConn` | client.go | bufio.Reader + net.Conn 包装器（支持 Peek 后续读） |
 | `hostToAddrBytes` | client.go | host 字符串 → (atyp, addr bytes) |
 | `relay` | client.go | 双向中继（client/forward 共用） |
+| `dialServer` | dial.go | 统一 server 拨号：cfg.Proxy 非空走 DialThroughProxy，否则 net.DialTimeout |
 | `parseTargetAddr` | forward.go | 解析 host:port → (atyp, addr, port) |
 | `parseConfig` | daemon.go | 统一配置解析 + daemon 初始化 + 日志初始化 |
 | `daemonize` | daemon.go | re-exec 后台（去掉 -d，os.Executable() 拿真实路径，日志/PID 走 resolveDaemonPath 写入 ~/.proxy_ob/） |
@@ -116,6 +121,7 @@ proxy_ob/
 - **bufferedConn** — 包装 `bufio.Reader` + `net.Conn`，支持 Peek 后继续 Read，使现有 SOCKS5 代码无需修改
 - **中继帧格式** — relay 帧用 `Atyp: 0x01, Addr: make([]byte, 4)` 哑值，Data 承载实际载荷
 - **配置优先级** — CLI flags > JSON config > 默认值
+- **上游代理链** — `-P http://` 或 `-P socks5://` 让 client/forward/reverse 连接 server 时穿过指定上游代理；`dialServer(cfg)` 统一封装（cfg.Proxy 为空则直连）；仅支持 SOCKS5 NO AUTH，HTTP CONNECT 不带认证头
 - **forward 模式无默认 listen** — 需用户显式指定 `-l`
 - **日志两级** — `infof()` 启动/关闭/错误，`verbosef()` 每连接详情（源→目标）
 - **daemon 跨平台** — `daemon.go` 共享 re-exec 逻辑，`daemon_unix.go` / `daemon_windows.go` 通过 build tag 提供平台特定 `SysProcAttr`

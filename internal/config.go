@@ -20,6 +20,7 @@ type Config struct {
 	Key        string `json:"key"`         // encryption key (hex or passphrase)
 	Target     string `json:"target"`      // forward target address host:port (forward only)
 	Reverse    string `json:"reverse"`     // reverse spec listen_port:target_host:target_port (reverse only)
+	Proxy      string `json:"proxy"`       // upstream proxy URL (http://host:port or socks5://host:port)
 	Verbose    bool   `json:"verbose"`     // enable verbose debug logging
 	Daemon     bool   `json:"daemon"`      // run as background daemon
 	ConfigFile string `json:"config_file"` // optional JSON config file path
@@ -33,6 +34,7 @@ type jsonConfig struct {
 	Key     string `json:"key"`
 	Target  string `json:"target"`
 	Reverse string `json:"reverse"`
+	Proxy   string `json:"proxy"`
 	Verbose bool   `json:"verbose"`
 	Daemon  bool   `json:"daemon"`
 }
@@ -66,6 +68,7 @@ func Parse(args []string) (*Config, error) {
 	configFile := fs.String("c", "", "optional JSON config file path")
 	target := fs.String("t", "", "target address host:port (forward only)")
 	reverse := fs.String("r", "", "reverse spec [bind:]port[:target] (reverse only)")
+	proxy := fs.String("P", "", "upstream proxy URL (http://host:port or socks5://host:port)")
 	verbose := fs.Bool("v", false, "verbose debug logging")
 	daemon := fs.Bool("d", false, "run as background daemon")
 
@@ -102,6 +105,9 @@ func Parse(args []string) (*Config, error) {
 		if jc.Reverse != "" {
 			cfg.Reverse = jc.Reverse
 		}
+		if jc.Proxy != "" {
+			cfg.Proxy = jc.Proxy
+		}
 		cfg.Verbose = jc.Verbose
 		cfg.Daemon = jc.Daemon
 	}
@@ -123,6 +129,9 @@ func Parse(args []string) (*Config, error) {
 	}
 	if *reverse != "" {
 		cfg.Reverse = *reverse
+	}
+	if *proxy != "" {
+		cfg.Proxy = *proxy
 	}
 	if *verbose {
 		cfg.Verbose = true

@@ -95,7 +95,7 @@ func parseTargetAddr(target string) (atyp byte, addr []byte, port uint16, err er
 func handleForwardConnection(localConn net.Conn, cfg *internal.Config, key [32]byte, atyp byte, addr []byte, port uint16) {
 	defer localConn.Close()
 
-	tunnelConn, err := net.DialTimeout("tcp", cfg.Server, dialTimeout)
+	tunnelConn, err := dialServer(cfg)
 	if err != nil {
 		verbosef("dial tunnel %s: %v", cfg.Server, err)
 		return

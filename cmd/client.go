@@ -98,7 +98,7 @@ func handleSOCKS5(conn net.Conn, cfg *internal.Config, key [32]byte) {
 
 	verbosef("socks5 %s -> %s:%d", conn.RemoteAddr(), addr, port)
 
-	tunnelConn, err := net.DialTimeout("tcp", cfg.Server, dialTimeout)
+	tunnelConn, err := dialServer(cfg)
 	if err != nil {
 		verbosef("dial tunnel %s: %v", cfg.Server, err)
 		internal.SendReply(conn, internal.ReplyHostUnreachable)
@@ -156,7 +156,7 @@ func handleHTTPProxy(br *bufio.Reader, conn net.Conn, cfg *internal.Config, key 
 
 	atyp, addrBytes := hostToAddrBytes(host)
 
-	tunnelConn, err := net.DialTimeout("tcp", cfg.Server, dialTimeout)
+	tunnelConn, err := dialServer(cfg)
 	if err != nil {
 		verbosef("dial tunnel %s: %v", cfg.Server, err)
 		if isConnect {
