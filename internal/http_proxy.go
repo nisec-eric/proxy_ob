@@ -51,7 +51,10 @@ func ReadHTTPProxyRequest(br *bufio.Reader) (host string, port uint16, isConnect
 
 	port = 80
 	if u.Port() != "" {
-		p, _ := strconv.ParseUint(u.Port(), 10, 16)
+		p, err := strconv.ParseUint(u.Port(), 10, 16)
+		if err != nil {
+			return "", 0, false, nil, fmt.Errorf("invalid port %q: %w", u.Port(), err)
+		}
 		port = uint16(p)
 	}
 
@@ -73,8 +76,10 @@ func readLine(br *bufio.Reader) (string, error) {
 	return strings.TrimRight(line, "\r\n"), nil
 }
 
+const maxHeaderLines = 100
+
 func consumeHeaders(br *bufio.Reader) error {
-	for {
+	for i := 0; i < maxHeaderLines; i++ {
 		line, err := readLine(br)
 		if err != nil {
 			return err
@@ -83,11 +88,12 @@ func consumeHeaders(br *bufio.Reader) error {
 			return nil
 		}
 	}
+	return fmt.Errorf("too many header lines (limit %d)", maxHeaderLines)
 }
 
 func readHeaders(br *bufio.Reader) (string, error) {
 	var sb strings.Builder
-	for {
+	for i := 0; i < maxHeaderLines; i++ {
 		line, err := readLine(br)
 		if err != nil {
 			return "", err
@@ -95,10 +101,10 @@ func readHeaders(br *bufio.Reader) (string, error) {
 		sb.WriteString(line)
 		sb.WriteString("\r\n")
 		if line == "" {
-			break
+			return sb.String(), nil
 		}
 	}
-	return sb.String(), nil
+	return "", fmt.Errorf("too many header lines (limit %d)", maxHeaderLines)
 }
 
 func SendHTTPResponse(conn net.Conn, statusCode int, statusText string) error {
