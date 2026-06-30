@@ -136,7 +136,7 @@ func handleReverseDataConn(cfg *internal.Config, key [32]byte, sessionID, target
 		return
 	}
 
-	localConn, err := net.DialTimeout("tcp", targetAddr, dialTimeout)
+	localConn, err := dialTarget(cfg, targetAddr)
 	if err != nil {
 		verbosef("reverse local dial %s: %v", targetAddr, err)
 		dataConn.Close()

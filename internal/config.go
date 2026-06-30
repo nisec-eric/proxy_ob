@@ -22,8 +22,9 @@ type Config struct {
 	Key        string `json:"key"`         // encryption key (hex or passphrase)
 	Target     string `json:"target"`      // forward target address host:port (forward only)
 	Reverse    string `json:"reverse"`     // reverse spec listen_port:target_host:target_port (reverse only)
-	Proxy      string `json:"proxy"`       // upstream proxy URL (http://host:port or socks5://host:port)
-	ProxyAuth  string `json:"proxy_auth"`  // upstream proxy credentials "user:pass" (HTTP Basic only)
+	Proxy      string `json:"proxy"`       // inbound proxy URL (client/forward/reverse → server)
+	ExitProxy  string `json:"exit_proxy"`  // outbound proxy URL (server → target, reverse → local target)
+	ProxyAuth  string `json:"proxy_auth"`  // upstream proxy credentials "user:pass" (HTTP Basic, shared by -P/-E)
 	Verbose    bool   `json:"verbose"`     // enable verbose debug logging
 	Daemon     bool   `json:"daemon"`      // run as background daemon
 	ConfigFile string `json:"config_file"` // optional JSON config file path
@@ -38,6 +39,7 @@ type jsonConfig struct {
 	Target    string `json:"target"`
 	Reverse   string `json:"reverse"`
 	Proxy     string `json:"proxy"`
+	ExitProxy string `json:"exit_proxy"`
 	ProxyAuth string `json:"proxy_auth"`
 	Verbose   bool   `json:"verbose"`
 	Daemon    bool   `json:"daemon"`
@@ -72,8 +74,9 @@ func Parse(args []string) (*Config, error) {
 	configFile := fs.String("c", "", "optional JSON config file path")
 	target := fs.String("t", "", "target address host:port (forward only)")
 	reverse := fs.String("r", "", "reverse spec [bind:]port[:target] (reverse only)")
-	proxy := fs.String("P", "", "upstream proxy URL (http://host:port or socks5://host:port)")
-	proxyAuth := fs.String("U", "", "upstream proxy credentials 'user:pass' (HTTP Basic auth)")
+	proxy := fs.String("P", "", "inbound proxy URL (http://host:port or socks5://host:port)")
+	exitProxy := fs.String("E", "", "outbound proxy URL (server→target or reverse→local target)")
+	proxyAuth := fs.String("U", "", "upstream proxy credentials 'user:pass' (HTTP Basic, shared by -P/-E)")
 	verbose := fs.Bool("v", false, "verbose debug logging")
 	daemon := fs.Bool("d", false, "run as background daemon")
 
@@ -113,6 +116,9 @@ func Parse(args []string) (*Config, error) {
 		if jc.Proxy != "" {
 			cfg.Proxy = jc.Proxy
 		}
+		if jc.ExitProxy != "" {
+			cfg.ExitProxy = jc.ExitProxy
+		}
 		if jc.ProxyAuth != "" {
 			cfg.ProxyAuth = jc.ProxyAuth
 		}
@@ -140,6 +146,9 @@ func Parse(args []string) (*Config, error) {
 	}
 	if *proxy != "" {
 		cfg.Proxy = *proxy
+	}
+	if *exitProxy != "" {
+		cfg.ExitProxy = *exitProxy
 	}
 	if *proxyAuth != "" {
 		cfg.ProxyAuth = *proxyAuth
@@ -175,16 +184,6 @@ func Parse(args []string) (*Config, error) {
 		}
 	}
 
-	if cfg.ProxyAuth != "" && cfg.Proxy == "" {
-		return nil, fmt.Errorf("proxy auth (-U) requires proxy URL (-P)")
-	}
-	if cfg.ProxyAuth != "" && !strings.HasPrefix(cfg.Proxy, "http://") {
-		return nil, fmt.Errorf("proxy auth (-U) only supported with http:// proxy, got %q", cfg.Proxy)
-	}
-	if cfg.ProxyAuth != "" && !strings.Contains(cfg.ProxyAuth, ":") {
-		return nil, fmt.Errorf("proxy auth (-U) must be in 'user:pass' format")
-	}
-
 	if cfg.Proxy != "" {
 		u, err := url.Parse(cfg.Proxy)
 		if err != nil {
@@ -193,7 +192,33 @@ func Parse(args []string) (*Config, error) {
 		switch u.Scheme {
 		case "http", "socks5", "socks5h", "socks":
 		default:
-			return nil, fmt.Errorf("unsupported proxy scheme %q: use http:// or socks5://", u.Scheme)
+			return nil, fmt.Errorf("unsupported -P scheme %q: use http:// or socks5://", u.Scheme)
+		}
+	}
+
+	if cfg.ExitProxy != "" {
+		u, err := url.Parse(cfg.ExitProxy)
+		if err != nil {
+			return nil, fmt.Errorf("invalid exit proxy URL (-E): %w", err)
+		}
+		switch u.Scheme {
+		case "http", "socks5", "socks5h", "socks":
+		default:
+			return nil, fmt.Errorf("unsupported -E scheme %q: use http:// or socks5://", u.Scheme)
+		}
+	}
+
+	if cfg.ProxyAuth != "" {
+		if cfg.Proxy == "" && cfg.ExitProxy == "" {
+			return nil, fmt.Errorf("proxy auth (-U) requires -P or -E")
+		}
+		httpP := strings.HasPrefix(cfg.Proxy, "http://")
+		httpE := strings.HasPrefix(cfg.ExitProxy, "http://")
+		if !httpP && !httpE {
+			return nil, fmt.Errorf("proxy auth (-U) requires an http:// proxy (-P or -E)")
+		}
+		if !strings.Contains(cfg.ProxyAuth, ":") {
+			return nil, fmt.Errorf("proxy auth (-U) must be in 'user:pass' format")
 		}
 	}
 

@@ -6,7 +6,7 @@
 
 ## OVERVIEW
 
-加密隧道代理。Go 1.25, ChaCha20-Poly1305 AEAD, SOCKS5 + HTTP/HTTPS 代理 + TCP 端口转发 + 反向端口转发 + 反向通用代理 + 上游代理链。单二进制 client/server/forward/reverse 四模式。唯一外部依赖 `golang.org/x/crypto`。
+加密隧道代理。Go 1.25, ChaCha20-Poly1305 AEAD, SOCKS5 + HTTP/HTTPS 代理 + TCP 端口转发 + 反向端口转发 + 反向通用代理 + 双向代理链（入口 `-P` + 出口 `-E`）。单二进制 client/server/forward/reverse 四模式。唯一外部依赖 `golang.org/x/crypto`。
 
 ## STRUCTURE
 
@@ -101,7 +101,8 @@ proxy_ob/
 | `bufferedConn` | client.go | bufio.Reader + net.Conn 包装器（支持 Peek 后续读） |
 | `hostToAddrBytes` | client.go | host 字符串 → (atyp, addr bytes) |
 | `relay` | client.go | 双向中继（client/forward 共用） |
-| `dialServer` | dial.go | 统一 server 拨号：cfg.Proxy 非空走 DialThroughProxy，否则 net.DialTimeout |
+| `dialServer` | dial.go | 统一入口侧拨号：cfg.Proxy 非空走 DialThroughProxy，否则 net.DialTimeout（client/forward/reverse 连 server） |
+| `dialTarget` | dial.go | 统一出口侧拨号：cfg.ExitProxy 非空走 DialThroughProxy，否则 net.DialTimeout（server 连 target、reverse 连本地 target） |
 | `parseTargetAddr` | forward.go | 解析 host:port → (atyp, addr, port) |
 | `parseConfig` | daemon.go | 统一配置解析 + daemon 初始化 + 日志初始化 |
 | `daemonize` | daemon.go | re-exec 后台（去掉 -d，os.Executable() 拿真实路径，日志/PID 走 resolveDaemonPath 写入 ~/.proxy_ob/） |
@@ -121,7 +122,7 @@ proxy_ob/
 - **bufferedConn** — 包装 `bufio.Reader` + `net.Conn`，支持 Peek 后继续 Read，使现有 SOCKS5 代码无需修改
 - **中继帧格式** — relay 帧用 `Atyp: 0x01, Addr: make([]byte, 4)` 哑值，Data 承载实际载荷
 - **配置优先级** — CLI flags > JSON config > 默认值
-- **上游代理链** — `-P http://` 或 `-P socks5://` 让 client/forward/reverse 连接 server 时穿过指定上游代理；`-U user:pass` 为 HTTP 代理附加 Basic 认证（凭证 base64 编码为 `Proxy-Authorization: Basic` 头）；`dialServer(cfg)` 统一封装（cfg.Proxy 为空则直连）；握手阶段用 `conn.SetDeadline(timeout)` 保护防半挂代理阻塞，成功后清除；SOCKS5 仅支持 NO AUTH，HTTP Basic 认证仅 HTTP 代理生效；启动时验证 Proxy scheme（http/socks5/socks5h/socks），https:// 等不支持的 scheme立即报错
+- **上游代理链** — `-P` 入口代理（client/forward/reverse 连 server 时穿过）、`-E` 出口代理（server 连 target、reverse 连本地 target 时穿过）；`-U user:pass` 为 HTTP 代理附加 Basic 认证（凭证 base64 编码为 `Proxy-Authorization: Basic` 头，`-P`/`-E` 共用同一凭证）；`dialServer(cfg)` 封装入口侧、`dialTarget(cfg, addr)` 封装出口侧（Cfg.Proxy/ExitProxy 为空则直连）；握手阶段用 `conn.SetDeadline(timeout)` 保护防半挂代理阻塞，成功后清除；SOCKS5 仅支持 NO AUTH，HTTP Basic 认证仅 HTTP 代理生效；启动时验证 Proxy/ExitProxy scheme（http/socks5/socks5h/socks），https:// 等不支持的 scheme立即报错
 - **forward 模式无默认 listen** — 需用户显式指定 `-l`
 - **日志两级** — `infof()` 启动/关闭/错误，`verbosef()` 每连接详情（源→目标）
 - **daemon 跨平台** — `daemon.go` 共享 re-exec 逻辑，`daemon_unix.go` / `daemon_windows.go` 通过 build tag 提供平台特定 `SysProcAttr`

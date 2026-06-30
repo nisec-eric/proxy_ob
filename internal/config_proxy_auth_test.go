@@ -11,13 +11,17 @@ func TestProxyValidation(t *testing.T) {
 		args    []string
 		wantErr string
 	}{
-		{"https scheme rejected", []string{"client", "-s", "h:1", "-k", "k", "-P", "https://proxy:443"}, "unsupported proxy scheme"},
-		{"ftp scheme rejected", []string{"client", "-s", "h:1", "-k", "k", "-P", "ftp://proxy:21"}, "unsupported proxy scheme"},
-		{"no colon", []string{"client", "-s", "h:1", "-k", "k", "-P", "http://h:1", "-U", "alicebadformat"}, "user:pass"},
-		{"U without P", []string{"client", "-s", "h:1", "-k", "k", "-U", "u:p"}, "requires proxy URL"},
-		{"U with socks5", []string{"client", "-s", "h:1", "-k", "k", "-P", "socks5://h:1", "-U", "u:p"}, "only supported with http"},
-		{"valid http", []string{"client", "-s", "h:1", "-k", "k", "-P", "http://h:1", "-U", "u:p"}, ""},
-		{"valid socks5", []string{"client", "-s", "h:1", "-k", "k", "-P", "socks5://h:1"}, ""},
+		{"P https rejected", []string{"client", "-s", "h:1", "-k", "k", "-P", "https://proxy:443"}, "unsupported -P scheme"},
+		{"P ftp rejected", []string{"client", "-s", "h:1", "-k", "k", "-P", "ftp://proxy:21"}, "unsupported -P scheme"},
+		{"E https rejected", []string{"server", "-k", "k", "-E", "https://proxy:443"}, "unsupported -E scheme"},
+		{"U without P or E", []string{"client", "-s", "h:1", "-k", "k", "-U", "u:p"}, "requires -P or -E"},
+		{"U with socks5 P only", []string{"client", "-s", "h:1", "-k", "k", "-P", "socks5://h:1", "-U", "u:p"}, "requires an http://"},
+		{"U with socks5 E only", []string{"server", "-k", "k", "-E", "socks5://h:1", "-U", "u:p"}, "requires an http://"},
+		{"U no colon", []string{"client", "-s", "h:1", "-k", "k", "-P", "http://h:1", "-U", "alicebadformat"}, "user:pass"},
+		{"valid P http + U", []string{"client", "-s", "h:1", "-k", "k", "-P", "http://h:1", "-U", "u:p"}, ""},
+		{"valid E http + U (server)", []string{"server", "-k", "k", "-E", "http://h:1", "-U", "u:p"}, ""},
+		{"valid E socks5 no U (server)", []string{"server", "-k", "k", "-E", "socks5://h:1"}, ""},
+		{"valid P + E both http + U shared", []string{"reverse", "-r", "1080", "-s", "h:1", "-k", "k", "-P", "http://h:1", "-E", "http://h:2", "-U", "u:p"}, ""},
 		{"valid special chars", []string{"client", "-s", "h:1", "-k", "k", "-P", "http://h:1", "-U", "u:p@ss:w0rd"}, ""},
 	}
 	for _, c := range cases {

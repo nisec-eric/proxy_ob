@@ -60,12 +60,12 @@ func RunServer() {
 		sem <- struct{}{}
 		go func() {
 			defer func() { <-sem }()
-			handleServerConnection(conn, key)
+			handleServerConnection(conn, cfg, key)
 		}()
 	}
 }
 
-func handleServerConnection(tunnelConn net.Conn, key [32]byte) {
+func handleServerConnection(tunnelConn net.Conn, cfg *internal.Config, key [32]byte) {
 	defer tunnelConn.Close()
 
 	if err := internal.ServerHandshake(tunnelConn, key); err != nil {
@@ -87,11 +87,11 @@ func handleServerConnection(tunnelConn net.Conn, key [32]byte) {
 		handleReverseData(tunnelConn, key, frame)
 		return
 	default:
-		handleProxyTarget(tunnelConn, key, frame)
+		handleProxyTarget(tunnelConn, cfg, key, frame)
 	}
 }
 
-func handleProxyTarget(tunnelConn net.Conn, key [32]byte, frame *internal.Frame) {
+func handleProxyTarget(tunnelConn net.Conn, cfg *internal.Config, key [32]byte, frame *internal.Frame) {
 	defer tunnelConn.Close()
 
 	var targetAddrPort string
@@ -109,7 +109,7 @@ func handleProxyTarget(tunnelConn net.Conn, key [32]byte, frame *internal.Frame)
 
 	verbosef("tunnel %s -> target %s", tunnelConn.RemoteAddr(), targetAddrPort)
 
-	targetConn, err := net.DialTimeout("tcp", targetAddrPort, dialTimeout)
+	targetConn, err := dialTarget(cfg, targetAddrPort)
 	if err != nil {
 		verbosef("dial target %s: %v", targetAddrPort, err)
 		return
